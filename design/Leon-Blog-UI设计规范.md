@@ -203,7 +203,10 @@ Leon Blog 是开发者个人博客与求职作品集，不是企业 CMS、内容
 - 米白背景上的普通链接、日期和状态文字固定使用 `vermilion-700`；链接还需具备下划线、箭头或明确文案。
 - 朱红只用于关键操作、选中状态和少量视觉节奏，不用于大面积背景。
 - 状态不能只依赖颜色；错误、成功和当前项同时使用文字或图标说明。
-- 键盘焦点使用 `2 px` 的 `ink-900` 外轮廓和 `2 px` 的背景色间隔，不用阴影代替焦点。
+- `Focus Visible`、`Pressed`、`Selected / Current`、`Disabled` 和 `Error` 是独立状态，不得共用一个状态类混合表达。
+- 常规浅色主题下使用分型焦点指示：输入控件改变内部背景，操作和表面控件使用内描边，文字与导航链接使用下划线和字重。已分型控件不显示黑色外轮廓。
+- 未分类的原生低频控件使用 `2 px` 品牌色可见焦点作为安全回退，不得以透明或零宽 `outline` 隐藏焦点。
+- 强制颜色模式保留操作系统的可见焦点轮廓；不硬编码系统最终显示的 RGB 色值。
 - P0 只实现浅色主题，但组件只能使用语义变量，不直接散落十六进制色值。
 
 建议映射为 CSS 语义变量：
@@ -217,7 +220,11 @@ Leon Blog 是开发者个人博客与求职作品集，不是企业 CMS、内容
 | `--color-border` | `stone-300` |
 | `--color-accent` | `vermilion-600` |
 | `--color-accent-text` | `vermilion-700` |
-| `--color-focus` | `ink-900` |
+| `--color-focus-surface` | `#F7E6E2` |
+| `--color-focus-accent` | `vermilion-700 / #A93B27` |
+| `--color-focus-on-accent` | `surface-0 / #FFFFFF` |
+| `--focus-indicator-width` | `2px` |
+| `--focus-underline-thickness` | `2px` |
 | `--color-success` | `success-700` |
 | `--color-warning` | `warning-700` |
 | `--color-danger` | `danger-700` |
@@ -233,7 +240,8 @@ P1 深色主题使用同一组语义变量，不改变组件 API：
 | `--color-border` | `#49433A` |
 | `--color-accent` | `#D96B50` |
 | `--color-accent-text` | `#F08A70` |
-| `--color-focus` | `#F2EDE3` |
+
+本轮不实现深色主题的焦点值；未来启用深色主题时，必须为同一组焦点语义 Token 重新验证明度、对比度和强制颜色模式，不复用旧的单一外轮廓变量。
 
 ## 6. 字体体系
 
@@ -321,20 +329,27 @@ P0 不下载体积较大的中文 Web Font，使用系统字体栈，避免字�
 
 - Default
 - Hover
+- Pressed
 - Focus Visible
+- Selected / Current（适用于导航、筛选、页码和选择控件）
 - Disabled
 - Loading（适用于提交操作）
 - Error（适用于输入）
 
-所有可交互控件应支持键盘操作，并提供清晰的焦点样式。
+所有可交互控件应支持键盘操作，并提供清晰的焦点样式。指针按下的瞬时反馈不能代替键盘焦点，当前项在焦点离开后仍须保留持久状态。
 
 组件外观与交互规则：
 
 - 按钮最小高度 `44 px`；纯图标按钮最小 `44 × 44 px`，必须有可访问名称。
 - 主要按钮使用 `vermilion-600` 底色和白字；Hover/Pressed 使用 `vermilion-700`，Loading 时保留原宽度。
+- 主要按钮获得键盘焦点时使用更深品牌背景和 `2 px` 反白内描边；次要按钮使用浅暖背景和 `2 px` 品牌内描边；危险按钮保留危险色语义和反白或危险色内描边。
+- 图标按钮、卡片链接、标签、筛选和分页获得焦点时使用浅暖背景和 `2 px` 品牌内描边。内描边不参与盒模型，不得引起尺寸或布局变化。
 - 文本链接默认使用正文色和下划线；重点链接可用 `vermilion-700`，不能只靠颜色表达可点击。
+- 文字和导航链接获得键盘焦点时使用 `2 px` 下划线、更大的下划线间距和一级字重提升，不显示黑色外框。导航当前项使用 `aria-current="page"` 和独立的持久视觉状态。
 - 访客端文章以分隔线列表为主，不使用带阴影的大圆角卡片。
 - 输入框高 `44 px` 起，Label 永远可见；Placeholder 不替代 Label。
+- 文本输入、搜索、密码、文本域和选择控件获得输入焦点时，保留原 `1 px` 语义边框并把内部背景切换为 `--color-focus-surface`；不显示外部 `outline`、ring 或阴影。失焦后恢复默认表面。
+- `aria-invalid="true"` 的错误边框、错误文案和 `aria-describedby` 关联的优先级高于焦点背景；Disabled 和 readonly 控件不显示可编辑焦点状态。
 - 加载 Skeleton 只模拟当前区域结构，遵循 `prefers-reduced-motion`；服务端错误提供重试或返回入口。
 
 ### 8.4 Markdown 内容规范

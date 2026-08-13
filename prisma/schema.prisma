@@ -1,0 +1,108 @@
+// Leon Blog P0 schema — follows architecture §8.1 exactly.
+// No P1/P2 tables. Connection URL is NOT embedded here; Prisma 7 reads it from
+// prisma.config.ts (CLI: MIGRATION_DATABASE_URL) and the runtime app passes the
+// pooled DATABASE_URL through @prisma/adapter-pg.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PostStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model User {
+  id               String    @id @default(uuid()) @db.Uuid
+  // NOTE: no @unique on email — uniqueness is enforced by the manual
+  // `users_email_lower_uq` functional index on LOWER(email) (architecture §8.1).
+  email            String    @db.VarChar(255)
+  passwordHash     String    @map("password_hash") @db.VarChar(255)
+  displayName      String    @map("display_name") @db.VarChar(50)
+  avatarUrl        String?   @map("avatar_url")
+  bio              String?   @db.VarChar(300)
+  isActive         Boolean   @default(true) @map("is_active")
+  sessionVersion   Int       @default(1) @map("session_version")
+  failedLoginCount Int       @default(0) @map("failed_login_count")
+  lockedUntil      DateTime? @map("locked_until") @db.Timestamptz(3)
+  lastLoginAt      DateTime? @map("last_login_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  posts Post[]
+
+  @@map("users")
+}
+
+model Post {
+  id             String     @id @default(uuid()) @db.Uuid
+  authorId       String     @map("author_id") @db.Uuid
+  categoryId     String?    @map("category_id") @db.Uuid
+  title          String     @db.VarChar(120)
+  slug           String     @unique @db.VarChar(160)
+  excerpt        String     @db.VarChar(300)
+  contentMd      String     @map("content_md")
+  coverImageUrl  String?    @map("cover_image_url")
+  status         PostStatus @default(DRAFT)
+  seoTitle       String?    @map("seo_title") @db.VarChar(60)
+  seoDescription String?    @map("seo_description") @db.VarChar(160)
+  seoImageUrl    String?    @map("seo_image_url")
+  publishedAt    DateTime?  @map("published_at") @db.Timestamptz(3)
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  author   User      @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  postTags PostTag[]
+
+  @@index([status, publishedAt(sort: Desc)])
+  @@index([categoryId, status, publishedAt(sort: Desc)])
+  @@index([authorId, updatedAt(sort: Desc)])
+  @@map("posts")
+}
+
+model Category {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique @db.VarChar(40)
+  slug        String   @unique @db.VarChar(60)
+  description String?  @db.VarChar(200)
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  posts Post[]
+
+  @@index([sortOrder])
+  @@map("categories")
+}
+
+model Tag {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique @db.VarChar(30)
+  slug      String   @unique @db.VarChar(50)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  postTags PostTag[]
+
+  @@map("tags")
+}
+
+model PostTag {
+  postId    String   @map("post_id") @db.Uuid
+  tagId     String   @map("tag_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([postId, tagId])
+  @@index([tagId, postId])
+  @@map("post_tags")
+}
