@@ -20,11 +20,11 @@ export const createCategorySchema = z.object({
     .max(MAX_CATEGORY_DESCRIPTION_LENGTH)
     .nullish()
     .transform(descriptionTransform),
-  sortOrder: z.number().int().min(0).max(1000).default(0),
+  sortOrder: z.number().int().min(0).max(1000),
 });
 
 export const updateCategorySchema = createCategorySchema.partial();
 
-// `z.input` — description/sortOrder are optional at the call site (zod defaults).
+// `z.input` — description is optional; sortOrder is required on create (omit → 422).
 export type CreateCategoryInput = z.input<typeof createCategorySchema>;
 export type UpdateCategoryInput = z.input<typeof updateCategorySchema>;

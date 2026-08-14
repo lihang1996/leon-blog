@@ -20,6 +20,7 @@ export const ErrorCodes = {
   TAG_SLUG_EXISTS: "TAG_SLUG_EXISTS",
   TAG_NAME_EXISTS: "TAG_NAME_EXISTS",
   VALIDATION_FAILED: "VALIDATION_FAILED",
+  PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
   RATE_LIMITED: "RATE_LIMITED",
   UNSUPPORTED_MEDIA_TYPE: "UNSUPPORTED_MEDIA_TYPE",
   FORBIDDEN: "FORBIDDEN",
@@ -63,4 +64,9 @@ export function conflict(code: ErrorCode, message: string): AppError {
 /** 422 — well-formed input that fails business validation. */
 export function unprocessable(code: ErrorCode, message: string, details?: unknown): AppError {
   return new AppError(code, 422, message, details);
+}
+
+/** 413 — JSON body exceeds the admin write byte cap. */
+export function payloadTooLarge(message = "请求体超过大小限制"): AppError {
+  return new AppError(ErrorCodes.PAYLOAD_TOO_LARGE, 413, message);
 }

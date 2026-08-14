@@ -90,6 +90,8 @@ function toAdminDetail(row: AdminPostDetailRow): AdminPostDTO {
     seoImageUrl: row.seoImageUrl,
     categoryId: row.categoryId,
     tagIds: tagIdsOf(row),
+    category: row.category,
+    tags: row.postTags.map((pt) => pt.tag),
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

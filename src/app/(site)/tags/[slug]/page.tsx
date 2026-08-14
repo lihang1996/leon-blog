@@ -4,7 +4,7 @@ import Link from "next/link";
 import { postQueryService } from "@/modules/post";
 import { tagService } from "@/modules/tag";
 import { isPageOutOfRange, normalizePageParams } from "@/lib/pagination";
-import { buildMetadata } from "@/lib/seo";
+import { buildMetadata, hasPublishedTaxonomy } from "@/lib/seo";
 import { ArticleRow } from "@/components/site/article-row";
 import { Pagination } from "@/components/site/pagination";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -23,7 +23,7 @@ export const instant = false;
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const tag = await tagService.getPublicTagBySlug(slug);
-  if (!tag) notFound();
+  if (!hasPublishedTaxonomy(tag)) notFound();
   return buildMetadata({
     title: `标签：#${tag.name}`,
     description: `浏览带有「${tag.name}」标签的文章。`,
@@ -34,7 +34,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function TagPostsPage({ params, searchParams }: Props) {
   const { slug } = await params;
   const tag = await tagService.getPublicTagBySlug(slug);
-  if (!tag || tag.postCount === 0) notFound();
+  if (!hasPublishedTaxonomy(tag)) notFound();
 
   const query = await searchParams;
   const { page, pageSize } = normalizePageParams({ page: query.page });

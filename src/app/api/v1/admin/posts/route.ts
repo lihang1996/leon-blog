@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { postQueryService, postCommandService, createPostSchema, postStatusQuerySchema } from "@/modules/post";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { assertSameOriginJson } from "@/lib/api/same-origin";
+import { readAdminJsonBody } from "@/lib/api/request-body";
 import { normalizePageParams } from "@/lib/pagination";
 import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
     assertSameOriginJson(request);
     const admin = await requireAdmin();
     ctx.userId = admin.id;
-    const input = createPostSchema.parse(await request.json());
+    const input = createPostSchema.parse(await readAdminJsonBody(request));
     const { post } = await postCommandService.createDraft({ actorId: admin.id, input });
     logger.info("admin.post.created", { requestId: ctx.requestId, postId: post.id });
     return apiCreated(post, ctx);

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { FormField, adminInputClass } from "@/components/admin/form-field";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { mapErrorToFields } from "@/components/admin/post-form-errors";
+import { MarkdownEditor } from "@/components/admin/markdown-editor";
 
 /**
  * Post editor (UI spec §8.2 / architecture §6.2). Single client form writing
@@ -27,6 +28,7 @@ type Props = {
   post?: AdminPostDTO | null;
   categories: AdminCategoryDTO[];
   tags: AdminTagDTO[];
+  allowedImageHosts?: readonly string[];
 };
 
 type FieldErrors = Partial<Record<keyof ReturnType<typeof collectContent> | "global", string>>;
@@ -68,7 +70,7 @@ function collectContent(state: {
   };
 }
 
-export function PostForm({ post: initialPost, categories, tags }: Props) {
+export function PostForm({ post: initialPost, categories, tags, allowedImageHosts = [] }: Props) {
   const router = useRouter();
   const [post, setPost] = useState<AdminPostDTO | null>(initialPost ?? null);
   const [title, setTitle] = useState(initialPost?.title ?? "");
@@ -85,7 +87,24 @@ export function PostForm({ post: initialPost, categories, tags }: Props) {
   const [errors, setErrors] = useState<FieldErrors>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
   const seoDetailsRef = useRef<HTMLDetailsElement>(null);
+  const [savedSnapshot, setSavedSnapshot] = useState(() =>
+    JSON.stringify(
+      collectContent({
+        title: initialPost?.title ?? "",
+        slug: initialPost?.slug ?? "",
+        excerpt: initialPost?.excerpt ?? "",
+        contentMd: initialPost?.contentMd ?? "",
+        categoryId: initialPost?.categoryId ?? "",
+        tagIds: initialPost?.tagIds ?? [],
+        coverImageUrl: initialPost?.coverImageUrl ?? "",
+        seoTitle: initialPost?.seoTitle ?? "",
+        seoDescription: initialPost?.seoDescription ?? "",
+        seoImageUrl: initialPost?.seoImageUrl ?? "",
+      }),
+    ),
+  );
 
   const slugLocked = post !== null && post.publishedAt !== null;
   const status = post?.status ?? "DRAFT";
@@ -100,6 +119,18 @@ export function PostForm({ post: initialPost, categories, tags }: Props) {
 
   const currentContent = () =>
     collectContent({ title, slug, excerpt, contentMd, categoryId, tagIds, coverImageUrl, seoTitle, seoDescription, seoImageUrl });
+
+  const isDirty = JSON.stringify(currentContent()) !== savedSnapshot;
+
+  useEffect(() => {
+    if (!isDirty) return;
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isDirty]);
 
   function applyError(error: ApiError) {
     // Validation details and top-level business conflicts share the same field
@@ -163,7 +194,10 @@ export function PostForm({ post: initialPost, categories, tags }: Props) {
       applyError(result.error);
       return;
     }
-    if (result.data) setPost(result.data);
+    if (result.data) {
+      setPost(result.data);
+      setSavedSnapshot(JSON.stringify(currentContent()));
+    }
     router.refresh();
   }
 
@@ -178,7 +212,10 @@ export function PostForm({ post: initialPost, categories, tags }: Props) {
       applyError(result.error);
       return;
     }
-    if (result.data) setPost(result.data);
+    if (result.data) {
+      setPost(result.data);
+      setSavedSnapshot(JSON.stringify(currentContent()));
+    }
     router.push(`/admin/posts/${id}/edit`);
     router.refresh();
   }
@@ -190,10 +227,14 @@ export function PostForm({ post: initialPost, categories, tags }: Props) {
       body: JSON.stringify({ action }),
     });
     if (result.error) {
+      if (action === "archive") setConfirmArchive(false);
       applyError(result.error);
       return;
     }
-    if (result.data) setPost(result.data);
+    if (result.data) {
+      setPost(result.data);
+      if (action === "archive") setConfirmArchive(false);
+    }
     router.refresh();
   }
 
@@ -264,15 +305,14 @@ export function PostForm({ post: initialPost, categories, tags }: Props) {
             error={errors.contentMd}
             hint="支持标题、列表、引用、链接、图片与代码块；不执行原始 HTML。"
           >
-            <textarea
+            <MarkdownEditor
               id="post-content"
               value={contentMd}
-              onChange={(event) => setContentMd(event.target.value)}
-              rows={18}
+              onChange={setContentMd}
               required
-              aria-invalid={errors.contentMd ? true : undefined}
-              aria-describedby={describedBy("post-content-hint", errors.contentMd && "post-content-error")}
-              className={`${adminInputClass} h-auto py-2 font-mono text-sm leading-relaxed`}
+              invalid={Boolean(errors.contentMd)}
+              describedBy={describedBy("post-content-hint", errors.contentMd && "post-content-error")}
+              allowedImageHosts={allowedImageHosts}
             />
           </FormField>
         </div>
@@ -438,7 +478,7 @@ export function PostForm({ post: initialPost, categories, tags }: Props) {
       {/* Save bar */}
       <div className="sticky bottom-0 mt-8 -mx-4 flex flex-wrap items-center gap-3 border-t border-border bg-bg/95 px-4 py-4 backdrop-blur md:-mx-8 md:px-8">
         <Button type="button" pending={busy === "save"} onClick={() => void handleSave()}>
-          保存草稿
+          {status === "DRAFT" ? "保存草稿" : "保存更新"}
         </Button>
         {previewUrl ? (
           <Button type="button" variant="secondary" onClick={() => window.open(previewUrl, "_blank", "noopener")}>
@@ -460,7 +500,7 @@ export function PostForm({ post: initialPost, categories, tags }: Props) {
           </Button>
         ) : null}
         {isPublished ? (
-          <Button type="button" variant="secondary" pending={busy === "archive"} onClick={() => void handleTransition("archive")}>
+          <Button type="button" variant="secondary" pending={busy === "archive"} onClick={() => setConfirmArchive(true)}>
             下线归档
           </Button>
         ) : null}
@@ -481,6 +521,15 @@ export function PostForm({ post: initialPost, categories, tags }: Props) {
         pending={busy === "delete"}
         onConfirm={() => void handleDelete()}
         onCancel={() => setConfirmDelete(false)}
+      />
+      <ConfirmDialog
+        open={confirmArchive}
+        title="下线归档这篇文章？"
+        description="归档后前台将不再展示。可以稍后恢复为草稿。"
+        confirmLabel="下线归档"
+        pending={busy === "archive"}
+        onConfirm={() => void handleTransition("archive")}
+        onCancel={() => setConfirmArchive(false)}
       />
     </form>
   );

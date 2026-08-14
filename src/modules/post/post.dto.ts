@@ -54,6 +54,9 @@ export type AdminPostDTO = {
   seoImageUrl: string | null;
   categoryId: string | null;
   tagIds: string[];
+  /** Present on admin reads used by the preview page; write responses may omit. */
+  category?: TaxonomyRef | null;
+  tags?: TaxonomyRef[];
   publishedAt: string | null;
   createdAt: string;
   updatedAt: string;

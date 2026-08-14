@@ -5,11 +5,11 @@ import { siteContent } from "@/config/site-content";
  * reads the database, an API, or an admin backend. The external link renders
  * only when a real URL exists; the screenshot renders only when provided.
  */
-export function ProjectEvidence() {
+export function ProjectEvidence({ className = "py-16" }: { className?: string }) {
   const evidence = siteContent.projectEvidence;
 
   return (
-    <section className="py-16">
+    <section className={className}>
       <h2 className="font-serif-cn text-2xl font-bold md:text-3xl">作品能力证据</h2>
       <article className="mt-8 rounded-lg border border-border bg-surface p-6 md:p-8">
         <h3 className="font-serif-cn text-xl font-bold text-text">{evidence.title}</h3>

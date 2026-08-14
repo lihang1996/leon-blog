@@ -23,6 +23,7 @@ export function CategoryManager({ initialCategories }: { initialCategories: Admi
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
+  const [sortOrder, setSortOrder] = useState(0);
   const [errors, setErrors] = useState<EntityFormErrors>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AdminCategoryDTO | null>(null);
@@ -81,6 +82,7 @@ export function CategoryManager({ initialCategories }: { initialCategories: Admi
     setName("");
     setSlug("");
     setDescription("");
+    setSortOrder(0);
     setErrors({});
   }
 
@@ -89,6 +91,7 @@ export function CategoryManager({ initialCategories }: { initialCategories: Admi
     setName(category.name);
     setSlug(category.slug);
     setDescription(category.description ?? "");
+    setSortOrder(category.sortOrder);
     setErrors({});
   }
 
@@ -98,7 +101,12 @@ export function CategoryManager({ initialCategories }: { initialCategories: Admi
     if (!operation) return;
     setErrors({});
     try {
-      const body = { name: name.trim(), slug: slug.trim(), description: description.trim() || null };
+      const body = {
+        name: name.trim(),
+        slug: slug.trim(),
+        description: description.trim() || null,
+        sortOrder,
+      };
       const res = editing
         ? await fetch(`/api/v1/admin/categories/${editing.id}`, {
             method: "PATCH",
@@ -197,6 +205,24 @@ export function CategoryManager({ initialCategories }: { initialCategories: Admi
             aria-invalid={errors.description ? true : undefined}
             aria-describedby={errors.description ? "cat-desc-error" : undefined}
             className={`${adminInputClass} h-auto py-2`}
+          />
+        </FormField>
+        <FormField label="排序" htmlFor="cat-sort" hint="整数 0–1000，数值越小越靠前" error={errors.sortOrder}>
+          <input
+            id="cat-sort"
+            type="number"
+            min={0}
+            max={1000}
+            step={1}
+            value={sortOrder}
+            onChange={(event) => {
+              const next = Number.parseInt(event.target.value, 10);
+              setSortOrder(Number.isFinite(next) ? next : 0);
+            }}
+            required
+            aria-invalid={errors.sortOrder ? true : undefined}
+            aria-describedby={`cat-sort-hint${errors.sortOrder ? " cat-sort-error" : ""}`}
+            className={adminInputClass}
           />
         </FormField>
         {errors.global ? (

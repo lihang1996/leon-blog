@@ -2,6 +2,8 @@ import { NextRequest } from "next/server";
 import { tagService, updateTagSchema } from "@/modules/tag";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { assertSameOrigin, assertSameOriginJson } from "@/lib/api/same-origin";
+import { assertAdminUuid } from "@/lib/api/admin-id";
+import { readAdminJsonBody } from "@/lib/api/request-body";
 import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
 import { apiSuccess, apiNoContent } from "@/lib/api/api-response";
@@ -17,7 +19,8 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     const admin = await requireAdmin();
     ctx.userId = admin.id;
     const { id } = await context.params;
-    const input = updateTagSchema.parse(await request.json());
+    assertAdminUuid(id);
+    const input = updateTagSchema.parse(await readAdminJsonBody(request));
     const { tag, changeSet } = await tagService.updateTag(id, input);
     await applyInvalidation(buildTagInvalidationPlan(changeSet), ctx.requestId);
     logger.info("admin.tag.updated", { requestId: ctx.requestId, tagId: tag.id });
@@ -36,6 +39,7 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
     const admin = await requireAdmin();
     ctx.userId = admin.id;
     const { id } = await context.params;
+    assertAdminUuid(id);
     const { changeSet, linkedPostCount } = await tagService.deleteTag(id);
     await applyInvalidation(buildTagInvalidationPlan(changeSet), ctx.requestId);
     logger.info("admin.tag.deleted", { requestId: ctx.requestId, tagId: id, linkedPostCount });

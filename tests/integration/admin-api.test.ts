@@ -3,8 +3,10 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 import { authError, ErrorCodes } from "@/lib/errors";
 import { GET as listPosts, POST as createPost } from "@/app/api/v1/admin/posts/route";
 import { GET as getPost, PATCH as patchPost, DELETE as deletePost } from "@/app/api/v1/admin/posts/[id]/route";
-import { DELETE as deleteCategory } from "@/app/api/v1/admin/categories/[id]/route";
-import { DELETE as deleteTag } from "@/app/api/v1/admin/tags/[id]/route";
+import { GET as listCategories, POST as createCategoryApi } from "@/app/api/v1/admin/categories/route";
+import { PATCH as patchCategory, DELETE as deleteCategory } from "@/app/api/v1/admin/categories/[id]/route";
+import { PATCH as patchTag, DELETE as deleteTag } from "@/app/api/v1/admin/tags/[id]/route";
+import { MAX_ADMIN_JSON_BODY_BYTES } from "@/lib/api/request-body";
 import { categoryService } from "@/modules/category";
 import { tagService } from "@/modules/tag";
 import { postQueryService } from "@/modules/post";
@@ -165,7 +167,7 @@ describe("admin post API", () => {
 describe("category/tag DELETE (bodyless 415 regression)", () => {
   it("deletes a category via DELETE without Content-Type (204)", async () => {
     mockAdmin();
-    const { category } = await categoryService.createCategory({ name: "待删分类", slug: "to-delete" });
+    const { category } = await categoryService.createCategory({ name: "待删分类", slug: "to-delete", sortOrder: 0 });
     const res = await deleteCategory(
       makeRequest(`http://localhost:3000/api/v1/admin/categories/${category.id}`, { method: "DELETE", origin: ORIGIN }),
       routeContext({ id: category.id }),
@@ -202,5 +204,119 @@ describe("category/tag DELETE (bodyless 415 regression)", () => {
     const detail = await postQueryService.getPublishedPostBySlug("tagged");
     expect(detail).not.toBeNull();
     expect(detail!.tags).toHaveLength(0);
+  });
+});
+
+describe("admin UUID pre-check and JSON body cap", () => {
+  const missingId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+  it("returns 422 VALIDATION_FAILED for an illegal post id and never 500", async () => {
+    mockAdmin();
+    for (const method of [
+      () => getPost(makeRequest(`${BASE}/not-a-uuid`), routeContext({ id: "not-a-uuid" })),
+      () =>
+        patchPost(
+          makeRequest(`${BASE}/not-a-uuid`, {
+            method: "PATCH",
+            origin: ORIGIN,
+            contentType: "application/json",
+            body: { content: { title: "x", excerpt: "x", contentMd: "x" } },
+          }),
+          routeContext({ id: "not-a-uuid" }),
+        ),
+      () => deletePost(makeRequest(`${BASE}/not-a-uuid`, { method: "DELETE", origin: ORIGIN }), routeContext({ id: "not-a-uuid" })),
+    ]) {
+      const res = await method();
+      expect(res.status).toBe(422);
+      const body = await res.json();
+      expect(body.error.code).toBe(ErrorCodes.VALIDATION_FAILED);
+    }
+  });
+
+  it("returns 404 for a well-formed UUID that does not exist", async () => {
+    mockAdmin();
+    const res = await getPost(makeRequest(`${BASE}/${missingId}`), routeContext({ id: missingId }));
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.code).toBe(ErrorCodes.POST_NOT_FOUND);
+  });
+
+  it("returns 422 for illegal category and tag ids on write routes", async () => {
+    mockAdmin();
+    const categoryRes = await patchCategory(
+      makeRequest("http://localhost:3000/api/v1/admin/categories/bad", {
+        method: "PATCH",
+        origin: ORIGIN,
+        contentType: "application/json",
+        body: { name: "x" },
+      }),
+      routeContext({ id: "bad" }),
+    );
+    expect(categoryRes.status).toBe(422);
+
+    const tagRes = await patchTag(
+      makeRequest("http://localhost:3000/api/v1/admin/tags/bad", {
+        method: "PATCH",
+        origin: ORIGIN,
+        contentType: "application/json",
+        body: { name: "x" },
+      }),
+      routeContext({ id: "bad" }),
+    );
+    expect(tagRes.status).toBe(422);
+  });
+
+  it("creates a category with sortOrder 7 and lists it as 7", async () => {
+    mockAdmin();
+    const created = await createCategoryApi(
+      makeRequest("http://localhost:3000/api/v1/admin/categories", {
+        method: "POST",
+        origin: ORIGIN,
+        contentType: "application/json",
+        body: { name: "排序分类", slug: "sorted", sortOrder: 7 },
+      }),
+    );
+    expect(created.status).toBe(201);
+    expect((await created.json()).data.sortOrder).toBe(7);
+
+    const omitted = await createCategoryApi(
+      makeRequest("http://localhost:3000/api/v1/admin/categories", {
+        method: "POST",
+        origin: ORIGIN,
+        contentType: "application/json",
+        body: { name: "无排序", slug: "no-sort" },
+      }),
+    );
+    expect(omitted.status).toBe(422);
+
+    const list = await listCategories(makeRequest("http://localhost:3000/api/v1/admin/categories"));
+    const items = (await list.json()).data as Array<{ slug: string; sortOrder: number }>;
+    expect(items.find((item) => item.slug === "sorted")?.sortOrder).toBe(7);
+  });
+
+  it("rejects an oversized JSON body with 413 PAYLOAD_TOO_LARGE", async () => {
+    mockAdmin();
+    const oversized = JSON.stringify({ title: "x", excerpt: "x", contentMd: "a".repeat(MAX_ADMIN_JSON_BODY_BYTES) });
+    const res = await createPost(
+      new Request(BASE, {
+        method: "POST",
+        headers: { origin: ORIGIN, "content-type": "application/json" },
+        body: oversized,
+      }) as unknown as Parameters<typeof createPost>[0],
+    );
+    expect(res.status).toBe(413);
+    expect((await res.json()).error.code).toBe(ErrorCodes.PAYLOAD_TOO_LARGE);
+  });
+
+  it("still creates a legal max-length article (200 KiB contentMd)", async () => {
+    mockAdmin();
+    const res = await createPost(
+      makeRequest(BASE, {
+        method: "POST",
+        origin: ORIGIN,
+        contentType: "application/json",
+        body: { title: "长文", excerpt: "摘要", contentMd: "a".repeat(200 * 1024) },
+      }),
+    );
+    expect(res.status).toBe(201);
   });
 });

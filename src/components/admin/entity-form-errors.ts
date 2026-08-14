@@ -1,4 +1,4 @@
-export type EntityFormErrors = Partial<Record<"name" | "slug" | "description" | "global", string>>;
+export type EntityFormErrors = Partial<Record<"name" | "slug" | "description" | "sortOrder" | "global", string>>;
 
 export type EntityApiError = {
   code?: string;
@@ -47,7 +47,7 @@ function mapEntityError(
 }
 
 export function mapCategoryFormError(error: EntityApiError): EntityFormErrors {
-  return mapEntityError(error, new Set(["name", "slug", "description"]), CATEGORY_CODE_FIELDS);
+  return mapEntityError(error, new Set(["name", "slug", "description", "sortOrder"]), CATEGORY_CODE_FIELDS);
 }
 
 export function mapTagFormError(error: EntityApiError): EntityFormErrors {

@@ -2,6 +2,8 @@ import { NextRequest } from "next/server";
 import { postQueryService, postCommandService, updatePostSchema } from "@/modules/post";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { assertSameOrigin, assertSameOriginJson } from "@/lib/api/same-origin";
+import { assertAdminUuid } from "@/lib/api/admin-id";
+import { readAdminJsonBody } from "@/lib/api/request-body";
 import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
 import { apiSuccess, apiNoContent } from "@/lib/api/api-response";
@@ -17,6 +19,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     const admin = await requireAdmin();
     ctx.userId = admin.id;
     const { id } = await context.params;
+    assertAdminUuid(id);
     const post = await postQueryService.getAdminPost(id);
     // Route through handleApiError so a missing post yields the same standard
     // error envelope as every other 4xx path (FIND-208 fix).
@@ -35,7 +38,8 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     const admin = await requireAdmin();
     ctx.userId = admin.id;
     const { id } = await context.params;
-    const input = updatePostSchema.parse(await request.json());
+    assertAdminUuid(id);
+    const input = updatePostSchema.parse(await readAdminJsonBody(request));
     const { post, changeSet } = await postCommandService.updatePost({
       postId: id,
       actorId: admin.id,
@@ -63,6 +67,7 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
     const admin = await requireAdmin();
     ctx.userId = admin.id;
     const { id } = await context.params;
+    assertAdminUuid(id);
     await postCommandService.deleteDraft({ postId: id });
     logger.info("admin.post.deleted", { requestId: ctx.requestId, postId: id });
     return apiNoContent(ctx);

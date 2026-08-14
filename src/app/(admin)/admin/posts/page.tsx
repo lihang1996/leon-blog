@@ -1,9 +1,11 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { postQueryService, postStatusQuerySchema, POST_STATUSES } from "@/modules/post";
 import { requireAdmin } from "@/lib/auth/require-admin";
-import { normalizePageParams } from "@/lib/pagination";
+import { isPageOutOfRange, normalizePageParams } from "@/lib/pagination";
 import { formatDate } from "@/lib/format";
 import { PostStatusBadge } from "@/components/admin/post-status-badge";
+import { adminPostsHref } from "@/components/admin/admin-posts-href";
 
 type Props = {
   searchParams: Promise<{ status?: string | string[]; page?: string | string[] }>;
@@ -25,14 +27,12 @@ export default async function AdminPostsPage({ searchParams }: Props) {
   const { page, pageSize } = normalizePageParams({ page: query.page });
   const { items, pagination } = await postQueryService.listAdminPosts({ page, pageSize }, status);
 
-  const filterHref = (value: string) => (value === "ALL" ? "/admin/posts" : `/admin/posts?status=${value}`);
-  const pageHref = (value: string, pageNumber: number) => {
-    const params = new URLSearchParams();
-    if (value !== "ALL") params.set("status", value);
-    if (pageNumber > 1) params.set("page", String(pageNumber));
-    const qs = params.toString();
-    return qs ? `/admin/posts?${qs}` : "/admin/posts";
-  };
+  const filterHref = (value: string) => adminPostsHref(value, 1);
+  const pageHref = adminPostsHref;
+
+  if (isPageOutOfRange(page, pagination.totalPages)) {
+    redirect(pageHref(status, pagination.totalPages));
+  }
 
   return (
     <div>

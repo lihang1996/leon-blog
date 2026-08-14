@@ -3,6 +3,8 @@ import { postQueryService } from "@/modules/post";
 import { categoryService } from "@/modules/category";
 import { tagService } from "@/modules/tag";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { isUuid } from "@/lib/api/admin-id";
+import { getAllowedImageHosts } from "@/lib/env";
 import { PostForm } from "@/components/admin/post-form";
 
 type Props = { params: Promise<{ id: string }> };
@@ -11,6 +13,7 @@ export default async function EditPostPage({ params }: Props) {
   await requireAdmin();
 
   const { id } = await params;
+  if (!isUuid(id)) notFound();
   const post = await postQueryService.getAdminPost(id);
   if (!post) notFound();
 
@@ -23,7 +26,7 @@ export default async function EditPostPage({ params }: Props) {
     <div>
       <h1 className="font-serif-cn text-2xl font-bold md:text-3xl">编辑文章</h1>
       <div className="mt-6">
-        <PostForm post={post} categories={categories} tags={tags} />
+        <PostForm post={post} categories={categories} tags={tags} allowedImageHosts={getAllowedImageHosts()} />
       </div>
     </div>
   );

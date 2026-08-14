@@ -18,13 +18,15 @@ type MetadataInput = {
   publishedTime?: string;
   modifiedTime?: string;
   noindex?: boolean;
+  /** Skip the root `%s · siteName` template (homepage already *is* the site name). */
+  absoluteTitle?: boolean;
 };
 
 export function buildMetadata(input: MetadataInput): Metadata {
   const url = new URL(input.path, siteUrl);
   const image = input.image ?? defaultOgImage;
   return {
-    title: input.title,
+    title: input.absoluteTitle ? { absolute: input.title } : input.title,
     description: input.description,
     alternates: { canonical: url.toString() },
     ...(input.noindex ? { robots: { index: false, follow: false } } : {}),
@@ -38,10 +40,45 @@ export function buildMetadata(input: MetadataInput): Metadata {
       ...(input.publishedTime ? { publishedTime: input.publishedTime } : {}),
       ...(input.modifiedTime ? { modifiedTime: input.modifiedTime } : {}),
     },
+    twitter: {
+      card: "summary_large_image",
+      title: input.title,
+      description: input.description,
+      images: [image],
+    },
   };
 }
 
 /** Serialize JSON-LD safely — escape `<` to block script injection (§15.4). */
 export function jsonLd(data: unknown): string {
   return JSON.stringify(data).replace(/</g, "\\u003c");
+}
+
+export function buildPersonJsonLd(name: string, image?: string | null) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "Person",
+    name,
+    ...(image ? { image } : {}),
+  };
+}
+
+export function buildBreadcrumbJsonLd(items: ReadonlyArray<{ name: string; path: string }>) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: items.map((item, index) => ({
+      "@type": "ListItem",
+      position: index + 1,
+      name: item.name,
+      item: new URL(item.path, siteUrl).toString(),
+    })),
+  };
+}
+
+/** Public category/tag pages 404 when missing or when no published posts. */
+export function hasPublishedTaxonomy<T extends { postCount: number }>(
+  entity: T | null,
+): entity is T {
+  return entity != null && entity.postCount > 0;
 }

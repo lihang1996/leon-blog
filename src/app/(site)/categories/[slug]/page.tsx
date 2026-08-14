@@ -4,7 +4,7 @@ import Link from "next/link";
 import { postQueryService } from "@/modules/post";
 import { categoryService } from "@/modules/category";
 import { isPageOutOfRange, normalizePageParams } from "@/lib/pagination";
-import { buildMetadata } from "@/lib/seo";
+import { buildMetadata, hasPublishedTaxonomy } from "@/lib/seo";
 import { ArticleRow } from "@/components/site/article-row";
 import { Pagination } from "@/components/site/pagination";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -23,7 +23,7 @@ export const instant = false;
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const category = await categoryService.getPublicCategoryBySlug(slug);
-  if (!category) notFound();
+  if (!hasPublishedTaxonomy(category)) notFound();
   return buildMetadata({
     title: `分类：${category.name}`,
     description: category.description ?? `浏览「${category.name}」分类下的文章。`,
@@ -34,7 +34,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function CategoryPostsPage({ params, searchParams }: Props) {
   const { slug } = await params;
   const category = await categoryService.getPublicCategoryBySlug(slug);
-  if (!category || category.postCount === 0) notFound();
+  if (!hasPublishedTaxonomy(category)) notFound();
 
   const query = await searchParams;
   const { page, pageSize } = normalizePageParams({ page: query.page });

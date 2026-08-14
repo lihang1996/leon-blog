@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { categoryService, createCategorySchema } from "@/modules/category";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { assertSameOriginJson } from "@/lib/api/same-origin";
+import { readAdminJsonBody } from "@/lib/api/request-body";
 import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
 import { apiSuccess, apiCreated } from "@/lib/api/api-response";
@@ -29,7 +30,7 @@ export async function POST(request: NextRequest) {
     assertSameOriginJson(request);
     const admin = await requireAdmin();
     ctx.userId = admin.id;
-    const input = createCategorySchema.parse(await request.json());
+    const input = createCategorySchema.parse(await readAdminJsonBody(request));
     const { category, changeSet } = await categoryService.createCategory(input);
     await applyInvalidation(buildCategoryInvalidationPlan(changeSet), ctx.requestId);
     logger.info("admin.category.created", { requestId: ctx.requestId, categoryId: category.id });

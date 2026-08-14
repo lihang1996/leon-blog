@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { postQueryService } from "@/modules/post";
 import { siteContent } from "@/config/site-content";
 import { siteUrl } from "@/lib/env";
-import { buildMetadata, jsonLd } from "@/lib/seo";
+import { buildMetadata, jsonLd, buildPersonJsonLd, buildBreadcrumbJsonLd } from "@/lib/seo";
 import { formatDate } from "@/lib/format";
 import { MarkdownContent } from "@/components/site/markdown-content";
 import { CategoryLink } from "@/components/site/category-link";
@@ -42,7 +42,8 @@ export default async function PostPage({ params }: Props) {
   if (!post) notFound();
 
   const url = `${siteUrl}/posts/${post.slug}`;
-  const jsonLdData = {
+  const person = buildPersonJsonLd(post.author.displayName, post.author.avatarUrl);
+  const article = {
     "@context": "https://schema.org",
     "@type": "Article",
     headline: post.title,
@@ -54,10 +55,17 @@ export default async function PostPage({ params }: Props) {
     publisher: { "@type": "Person", name: siteContent.author.name },
     mainEntityOfPage: { "@type": "WebPage", "@id": url },
   };
+  const breadcrumbItems = [
+    { name: "首页", path: "/" },
+    ...(post.category ? [{ name: post.category.name, path: `/categories/${post.category.slug}` }] : []),
+    { name: post.title, path: `/posts/${post.slug}` },
+  ];
 
   return (
     <article className="py-12">
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(jsonLdData) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(article) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(person) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(buildBreadcrumbJsonLd(breadcrumbItems)) }} />
       <div className="mx-auto max-w-read">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-text-muted">
           <time dateTime={post.publishedAt}>{formatDate(post.publishedAt)}</time>

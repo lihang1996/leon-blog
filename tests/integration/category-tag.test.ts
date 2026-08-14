@@ -31,8 +31,9 @@ async function expectError(promise: Promise<unknown>, code: string, status: numb
 
 describe("category service", () => {
   it("creates and updates a category", async () => {
-    const { category } = await categoryService.createCategory({ name: "前端", slug: "frontend" });
+    const { category } = await categoryService.createCategory({ name: "前端", slug: "frontend", sortOrder: 7 });
     expect(category.slug).toBe("frontend");
+    expect(category.sortOrder).toBe(7);
 
     const updated = await categoryService.updateCategory(category.id, { name: "前端工程", slug: "frontend-eng" });
     expect(updated.category.name).toBe("前端工程");
@@ -42,9 +43,9 @@ describe("category service", () => {
   });
 
   it("rejects a duplicate name or slug with 409", async () => {
-    await categoryService.createCategory({ name: "前端", slug: "frontend" });
-    await expectError(categoryService.createCategory({ name: "前端", slug: "other" }), ErrorCodes.CATEGORY_NAME_EXISTS, 409);
-    await expectError(categoryService.createCategory({ name: "其他", slug: "frontend" }), ErrorCodes.CATEGORY_SLUG_EXISTS, 409);
+    await categoryService.createCategory({ name: "前端", slug: "frontend", sortOrder: 0 });
+    await expectError(categoryService.createCategory({ name: "前端", slug: "other", sortOrder: 0 }), ErrorCodes.CATEGORY_NAME_EXISTS, 409);
+    await expectError(categoryService.createCategory({ name: "其他", slug: "frontend", sortOrder: 0 }), ErrorCodes.CATEGORY_SLUG_EXISTS, 409);
   });
 
   it("maps a real DB P2002 on the name unique to 409 NAME_EXISTS (RQ-006, real adapter shape)", async () => {
@@ -61,7 +62,7 @@ describe("category service", () => {
   });
 
   it("keeps posts but sets category_id to null on delete", async () => {
-    const { category } = await categoryService.createCategory({ name: "后端", slug: "backend" });
+    const { category } = await categoryService.createCategory({ name: "后端", slug: "backend", sortOrder: 0 });
     const post = await createPost({ authorId, title: "文章", slug: "in-backend", excerpt: "a", status: "PUBLISHED", categoryId: category.id });
 
     const result = await categoryService.deleteCategory(category.id);
