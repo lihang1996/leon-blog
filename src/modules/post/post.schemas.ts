@@ -55,7 +55,10 @@ export const updatePostSchema = z
   });
 
 export const postStatusQuerySchema = z.object({
-  status: z.enum(["DRAFT", "PUBLISHED", "ARCHIVED", "ALL"]).default("ALL"),
+  status: z
+    .enum(["DRAFT", "PUBLISHED", "ARCHIVED", "ALL"])
+    .nullish()
+    .transform((v) => v ?? "ALL"),
 });
 
 // `z.input` = the shape callers actually provide (optional SEO fields, tagIds

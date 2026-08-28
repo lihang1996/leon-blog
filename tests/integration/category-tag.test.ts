@@ -49,13 +49,13 @@ describe("category service", () => {
   });
 
   it("maps a real DB P2002 on the name unique to 409 NAME_EXISTS (RQ-006, real adapter shape)", async () => {
-    await categoryRepository.create({ name: "前端", slug: "frontend", description: null, sortOrder: 1 });
+    await categoryRepository.create({ name: "前端", slug: "frontend", description: null, icon: null, sortOrder: 1 });
     // Bypass the service pre-check so the DB unique index decides. This
     // exercises uniqueViolationField() against a real Prisma 7 P2002 error —
     // if the adapter error shape differs from the handler's assumption, this
     // test fails (it would surface CATEGORY_SLUG_EXISTS instead).
     await expectError(
-      categoryRepository.create({ name: "前端", slug: "frontend-other", description: null, sortOrder: 2 }),
+      categoryRepository.create({ name: "前端", slug: "frontend-other", description: null, icon: null, sortOrder: 2 }),
       ErrorCodes.CATEGORY_NAME_EXISTS,
       409,
     );

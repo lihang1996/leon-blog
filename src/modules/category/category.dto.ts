@@ -7,6 +7,8 @@ export type PublicCategoryDTO = {
   name: string;
   slug: string;
   description: string | null;
+  /** 手绘图标 key（dev/bulb/...），可空。 */
+  icon: string | null;
   /** Number of PUBLISHED posts in this category. */
   postCount: number;
 };
@@ -16,6 +18,7 @@ export type AdminCategoryDTO = {
   name: string;
   slug: string;
   description: string | null;
+  icon: string | null;
   sortOrder: number;
   /** Total posts (any status) — shown in the admin confirm dialog. */
   postCount: number;

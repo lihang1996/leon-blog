@@ -20,3 +20,34 @@ export function formatDate(iso: string): string {
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
   return `${get("year")} 年 ${get("month")} 月 ${get("day")} 日`;
 }
+
+const zhCNDateTime = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+  timeZone: "Asia/Shanghai",
+});
+
+/** Formats ISO date to `YYYY-MM-DD HH:mm` in Asia/Shanghai timezone */
+export function formatDateTime(iso?: string | null): string {
+  if (!iso) return "-";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "-";
+  const parts = zhCNDateTime.formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
+/** Formats ISO date to `YYYY-MM-DD` in Asia/Shanghai timezone */
+export function formatDateDash(iso?: string | null): string {
+  if (!iso) return "-";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "-";
+  const parts = zhCNDate.formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  const pad = (v: string) => v.padStart(2, "0");
+  return `${get("year")}-${pad(get("month"))}-${pad(get("day"))}`;
+}

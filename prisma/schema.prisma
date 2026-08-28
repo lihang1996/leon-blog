@@ -72,6 +72,7 @@ model Category {
   name        String   @unique @db.VarChar(40)
   slug        String   @unique @db.VarChar(60)
   description String?  @db.VarChar(200)
+  icon        String?  @db.VarChar(30)
   sortOrder   Int      @default(0) @map("sort_order")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)

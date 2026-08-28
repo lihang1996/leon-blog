@@ -31,6 +31,7 @@ function toPublicDTO(row: PublicCategoryRow): PublicCategoryDTO {
     name: row.name,
     slug: row.slug,
     description: row.description,
+    icon: row.icon,
     postCount: row._count.posts,
   };
 }
@@ -41,6 +42,7 @@ function toAdminDTO(row: AdminCategoryRow): AdminCategoryDTO {
     name: row.name,
     slug: row.slug,
     description: row.description,
+    icon: row.icon,
     sortOrder: row.sortOrder,
     postCount: row._count.posts,
   };
@@ -108,6 +110,7 @@ export const categoryService = {
       name,
       slug,
       description,
+      icon: input.icon ?? null,
       sortOrder: input.sortOrder ?? 0,
     });
     return { category: toAdminDTO(row), changeSet: { oldSlug: null, newSlug: slug, affectedPostSlugs: [] } };
@@ -137,6 +140,7 @@ export const categoryService = {
       name,
       slug,
       description,
+      icon: input.icon !== undefined ? input.icon : undefined,
       sortOrder: input.sortOrder,
     });
     return {

@@ -32,7 +32,6 @@ const nextConfig: NextConfig = {
     "pg",
     "@prisma/client",
     "@prisma/adapter-pg",
-    "shiki",
   ],
   // Security response headers (architecture §23.4). The CSP is pragmatic:
   // Next.js injects inline scripts/styles for hydration + the RSC stream, and

@@ -27,6 +27,7 @@ export const publicCategorySelect = {
   name: true,
   slug: true,
   description: true,
+  icon: true,
   _count: { select: publishedPostCount },
 } satisfies Prisma.CategorySelect;
 
@@ -35,6 +36,7 @@ export const adminCategorySelect = {
   name: true,
   slug: true,
   description: true,
+  icon: true,
   sortOrder: true,
   _count: { select: { posts: true } },
 } satisfies Prisma.CategorySelect;
@@ -103,11 +105,18 @@ export const categoryRepository = {
     name: string;
     slug: string;
     description: string | null;
+    icon: string | null;
     sortOrder: number;
   }): Promise<AdminCategoryRow> {
     try {
       return await prisma.category.create({
-        data: { name: data.name, slug: data.slug, description: data.description, sortOrder: data.sortOrder },
+        data: {
+          name: data.name,
+          slug: data.slug,
+          description: data.description,
+          icon: data.icon,
+          sortOrder: data.sortOrder,
+        },
         select: adminCategorySelect,
       });
     } catch (error) {
@@ -117,7 +126,7 @@ export const categoryRepository = {
 
   async update(
     id: string,
-    data: { name?: string; slug?: string; description?: string | null; sortOrder?: number },
+    data: { name?: string; slug?: string; description?: string | null; icon?: string | null; sortOrder?: number },
   ): Promise<AdminCategoryRow> {
     try {
       return await prisma.category.update({

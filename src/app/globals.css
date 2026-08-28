@@ -7,18 +7,22 @@
  * variables, never raw hex values.
  */
 @theme {
-  /* Colors (UI spec §5.1) */
-  --color-bg: #f7f4ee; /* paper-50 */
-  --color-surface: #ffffff; /* surface-0 */
-  --color-text: #171717; /* ink-900 */
-  --color-text-muted: #6f6a61; /* stone-700 */
-  --color-border: #d7d1c7; /* stone-300 */
-  --color-accent: #c34a32; /* vermilion-600 */
-  --color-accent-text: #a93b27; /* vermilion-700 */
-  --color-focus-surface: #f7e6e2; /* warm focus surface */
-  --color-focus-accent: #a93b27; /* vermilion-700 */
-  --color-focus-on-accent: #ffffff; /* surface-0 */
+  /* Colors — mapped from design/Leon-Blog-重设计方案-v2.md §2 and pixel-sampled
+   * from design/ui-screens/v2/*.png (mockups are the source of truth). */
+  --color-bg: #fdf7ee; /* 纸底 sampled #FCF6ED–#FEF9F1 */
+  --color-surface: #ffffff; /* 卡片白 */
+  --color-text: #1a1a1a; /* 墨色 */
+  --color-text-muted: #6b655c; /* 石色 */
+  --color-border: #d7d1c7;
+  --color-accent: #e65a00; /* 橘红 = 唯一主操作色 (sampled #E05307–#F3520B) */
+  --color-accent-text: #c24e00; /* 橘红加深（hover/active） */
+  --color-focus-surface: #fdebdd; /* warm focus surface */
+  --color-focus-accent: #c24e00;
+  --color-focus-on-accent: #ffffff;
   --color-placeholder: #69635b; /* readable on surface and focus-surface */
+  --color-mustard: #f6d17b; /* 芥黄选中底 (sampled #F1CE83–#F6D17B) */
+  --color-mustard-deep: #d9a821; /* 芥黄高亮字/星 */
+  --color-sage: #5b7b5a; /* sage 只做装饰 */
   --color-success: #356449;
   --color-warning: #7a5716;
   --color-danger: #9e2f26;
@@ -40,12 +44,19 @@
 }
 
 @layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
   html {
     -webkit-text-size-adjust: 100%;
     scroll-behavior: smooth;
   }
 
   body {
+    min-width: 320px;
     background-color: var(--color-bg);
     color: var(--color-text);
     font-family: var(--font-sans-cn);
@@ -69,6 +80,117 @@
   ::selection {
     background-color: var(--color-accent);
     color: var(--color-surface);
+  }
+}
+
+@layer components {
+  .page-container {
+    width: 100%;
+    max-width: 1440px;
+    margin-inline: auto;
+    padding-inline: 1rem;
+  }
+
+  .site-header {
+    border-bottom: 1px solid #eadfce;
+    background: rgb(253 251 247 / 92%);
+    backdrop-filter: blur(10px);
+  }
+
+  .site-header-inner {
+    width: 100%;
+    max-width: 1440px;
+    height: 80px;
+    margin-inline: auto;
+    padding-inline: 1rem;
+  }
+
+  .paper-card {
+    border: 1px solid #eedfc9;
+    border-radius: 24px;
+    background: rgb(255 255 255 / 82%);
+    box-shadow: 0 4px 18px rgb(150 105 45 / 7%);
+  }
+
+  .paper-card-dashed {
+    border: 2px dashed #ead4b7;
+    border-radius: 24px;
+    background: rgb(255 255 255 / 32%);
+  }
+
+  .code-container {
+    border: 1px solid #302e29;
+    border-radius: 16px;
+    background: #20211f;
+    color: #ece7df;
+    box-shadow: 0 5px 16px rgb(35 28 20 / 12%);
+  }
+
+  .code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 2.25rem;
+    padding: 0 1rem;
+    border-bottom: 1px solid #3b3a35;
+    background: #292a27;
+  }
+
+  .page-title {
+    font-size: clamp(2.6rem, 5vw, 4.5rem);
+    line-height: 1.05;
+    letter-spacing: -0.04em;
+  }
+
+  .admin-title {
+    font-size: clamp(2.25rem, 4vw, 3.5rem);
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+  }
+
+  .animate-tab-fade {
+    animation: tab-fade 220ms ease-out both;
+  }
+
+  .animate-scale-up {
+    animation: scale-up 180ms ease-out both;
+  }
+
+  .animate-fade-in {
+    animation: fade-in 180ms ease-out both;
+  }
+}
+
+@keyframes tab-fade {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scale-up {
+  from { opacity: 0; transform: scale(.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (min-width: 768px) {
+  .page-container {
+    padding-inline: 2rem;
+  }
+
+  .site-header-inner {
+    padding-inline: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-tab-fade,
+  .animate-scale-up,
+  .animate-fade-in {
+    animation: none;
   }
 }
 
@@ -286,5 +408,109 @@
     box-shadow: none !important;
     outline: var(--focus-indicator-width) solid Highlight !important;
     outline-offset: 2px !important;
+  }
+}
+
+/* The custom paw never owns pointer events. Public pages hide the native
+ * pointer while the paw is active so the two cursors do not overlap. */
+html[data-paw-cursor] body,
+html[data-paw-cursor] body * {
+  cursor: none !important;
+}
+
+/* Text editing and reading areas keep the browser's native cursor. */
+html[data-paw-cursor] input,
+html[data-paw-cursor] textarea,
+html[data-paw-cursor] select,
+html[data-paw-cursor] [contenteditable="true"],
+html[data-paw-cursor] pre,
+html[data-paw-cursor] code,
+html[data-paw-cursor] .code-container,
+html[data-paw-cursor] .post-prose,
+html[data-paw-cursor] .post-prose * {
+  cursor: auto !important;
+}
+
+.paw-cursor,
+.paw-cursor-stamp {
+  pointer-events: none;
+  position: fixed;
+  z-index: 9999;
+}
+
+.paw-cursor {
+  height: 28px;
+  width: 28px;
+}
+
+.paw-cursor__icon {
+  display: block;
+  height: 28px;
+  transform-origin: 8.75px 5.25px;
+  transition: transform 150ms ease-out, opacity 150ms ease-out;
+  width: 28px;
+}
+
+.paw-cursor[data-state="default"] .paw-cursor__icon {
+  transform: rotate(-22deg);
+}
+
+.paw-cursor[data-state="hover"] .paw-cursor__icon {
+  transform: rotate(0deg) scale(1.12);
+}
+
+.paw-cursor[data-state="pressed"] .paw-cursor__icon {
+  transform: rotate(0deg) scale(0.88);
+  transition-duration: 120ms;
+}
+
+.paw-cursor[data-state="text"] .paw-cursor__icon,
+.paw-cursor[data-reduced-motion="true"] .paw-cursor__icon {
+  transform: none;
+  transition: none;
+}
+
+.paw-cursor-stamp {
+  height: 20px;
+  opacity: 0.35;
+  width: 20px;
+}
+
+.paw-cursor-stamp__icon {
+  animation: paw-cursor-stamp 550ms ease-out both;
+  display: block;
+  height: 20px;
+  width: 20px;
+}
+
+@keyframes paw-cursor-stamp {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  15% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  55% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .paw-cursor-stamp {
+    display: none;
+  }
+}
+
+@media not all and (hover: hover) and (pointer: fine) {
+  .paw-cursor,
+  .paw-cursor-stamp {
+    display: none;
   }
 }

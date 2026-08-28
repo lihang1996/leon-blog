@@ -32,6 +32,12 @@
 # local ephemeral postgres data dir (embedded-postgres verification)
 /.tmp-pgdata/
 
+# local scratch: Feishu API dumps, QA screenshots, agent skills
+/.tmp-feishu/
+/qa-*.png
+/.agents/
+/skills-lock.json
+
 # misc
 .DS_Store
 *.pem

@@ -13,18 +13,19 @@ import { siteUrl } from "@/lib/env";
  * published posts to guarantee it never silently omits entries.
  */
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const [firstPage, categories, tags] = await Promise.all([
-    postQueryService.listPublishedPosts({ page: 1, pageSize: 50 }),
-    categoryService.listPublicCategories(),
-    tagService.listPublicTags(),
-  ]);
-
   const entries: MetadataRoute.Sitemap = [
     { url: `${siteUrl}/`, changeFrequency: "daily", priority: 1 },
     { url: `${siteUrl}/posts`, changeFrequency: "daily", priority: 0.9 },
     { url: `${siteUrl}/categories`, changeFrequency: "weekly", priority: 0.6 },
     { url: `${siteUrl}/tags`, changeFrequency: "weekly", priority: 0.6 },
   ];
+
+  try {
+    const [firstPage, categories, tags] = await Promise.all([
+      postQueryService.listPublishedPosts({ page: 1, pageSize: 50 }),
+      categoryService.listPublicCategories(),
+      tagService.listPublicTags(),
+    ]);
 
   // Collect every published post across paginated pages (pageSize is clamped
   // to 50 by the query service, so we keep stepping until fully drained).
@@ -49,6 +50,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }
   for (const tag of tags) {
     entries.push({ url: `${siteUrl}/tags/${tag.slug}`, changeFrequency: "weekly", priority: 0.5 });
+  }
+  } catch {
+    // Return base entries if DB is not reachable during static build
   }
 
   return entries;

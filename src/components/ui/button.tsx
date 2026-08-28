@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes } from "react";
+import Link from "next/link";
 
 /**
  * Primary/secondary/danger buttons (UI spec §8.3). Height ≥ 44 px and typed
@@ -6,7 +7,9 @@ import type { ButtonHTMLAttributes } from "react";
  * name and its layout footprint while a visual busy label is overlaid.
  */
 type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "secondary" | "danger";
+  href?: string;
+  size?: "sm" | "md" | "lg";
+  variant?: "primary" | "secondary" | "danger" | "outline" | "ghost";
   pending?: boolean;
 };
 
@@ -15,27 +18,28 @@ const variantClasses: Record<NonNullable<Props["variant"]>, string> = {
     "focus-action-primary bg-accent text-white enabled:hover:bg-accent-text disabled:bg-border disabled:text-text-muted",
   secondary:
     "focus-action-secondary border border-border bg-surface text-text enabled:hover:border-accent-text enabled:hover:text-accent-text",
+  outline:
+    "focus-action-secondary border border-border bg-surface text-text enabled:hover:border-accent-text enabled:hover:text-accent-text",
   danger:
     "focus-action-danger border border-danger/40 bg-surface text-danger enabled:hover:bg-danger enabled:hover:text-white",
+  ghost:
+    "text-text-muted enabled:hover:bg-focus-surface enabled:hover:text-accent-text",
 };
 
 export function Button({
   variant = "primary",
+  size = "md",
   pending = false,
+  href,
   className = "",
   children,
   disabled,
   type = "button",
   ...props
 }: Props) {
-  return (
-    <button
-      {...props}
-      type={type}
-      disabled={disabled || pending}
-      aria-busy={pending || undefined}
-      className={`inline-grid min-h-11 grid-cols-[1fr] items-center justify-items-center rounded-md px-5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${variantClasses[variant]} ${className}`}
-    >
+  const classes = `inline-grid min-h-11 grid-cols-[1fr] items-center justify-items-center rounded-full text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${size === "sm" ? "px-4 text-xs" : size === "lg" ? "px-8 text-base" : "px-6"} ${variantClasses[variant]} ${className}`;
+  const content = (
+    <>
       <span className={`col-start-1 row-start-1 ${pending ? "opacity-0" : ""}`}>{children}</span>
       <span
         aria-hidden="true"
@@ -44,6 +48,22 @@ export function Button({
         <Spinner />
         <span>处理中…</span>
       </span>
+    </>
+  );
+
+  if (href) {
+    return <Link href={href} className={classes}>{content}</Link>;
+  }
+
+  return (
+    <button
+      {...props}
+      type={type}
+      disabled={disabled || pending}
+      aria-busy={pending || undefined}
+      className={classes}
+    >
+      {content}
     </button>
   );
 }
