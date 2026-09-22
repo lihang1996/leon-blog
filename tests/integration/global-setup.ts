@@ -11,6 +11,10 @@ import "dotenv/config";
 export default async function globalSetup(): Promise<void> {
   const testDbUrl = process.env.TEST_DATABASE_URL;
   if (!testDbUrl) throw new Error("TEST_DATABASE_URL is required to run integration tests");
+  const databaseName = new URL(testDbUrl).pathname.slice(1);
+  if (!/^[a-zA-Z0-9_]*test[a-zA-Z0-9_]*$/i.test(databaseName)) {
+    throw new Error("Integration migrations require an isolated database with 'test' in its name");
+  }
 
   await ensureTestDatabase(testDbUrl);
 

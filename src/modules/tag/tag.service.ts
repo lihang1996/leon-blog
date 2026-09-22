@@ -19,7 +19,7 @@ function toPublicDTO(row: PublicTagRow): PublicTagDTO {
 }
 
 function toAdminDTO(row: AdminTagRow): AdminTagDTO {
-  return { id: row.id, name: row.name, slug: row.slug, postCount: row._count.postTags };
+  return { id: row.id, version: row.version, name: row.name, slug: row.slug, postCount: row._count.postTags };
 }
 
 function validate(input: { name: string; slug: string }): void {
@@ -80,6 +80,9 @@ export const tagService = {
   ): Promise<{ tag: AdminTagDTO; changeSet: TagChangeSet }> {
     const existing = await tagRepository.findById(id);
     if (!existing) throw notFound(ErrorCodes.TAG_NOT_FOUND, "标签不存在");
+    if (existing.version !== input.version) {
+      throw conflict(ErrorCodes.TAG_CONCURRENT_MODIFICATION, "标签已被其他操作修改，请刷新后重试");
+    }
 
     const name = normalizeTagName(input.name ?? existing.name);
     const slug = (input.slug ?? existing.slug).trim().toLowerCase();
@@ -93,16 +96,19 @@ export const tagService = {
     }
 
     const affectedPostSlugs = await tagRepository.findPublishedPostSlugs(id);
-    const row = await tagRepository.update(id, { name, slug });
+    const row = await tagRepository.update(id, { name, slug }, input.version);
     return { tag: toAdminDTO(row), changeSet: { oldSlug: existing.slug, newSlug: slug, affectedPostSlugs } };
   },
 
   /** Deleting a tag removes only the post↔tag links (PRD B-12 / §7.5). */
-  async deleteTag(id: string): Promise<{ changeSet: TagChangeSet; linkedPostCount: number }> {
+  async deleteTag(id: string, version: number): Promise<{ changeSet: TagChangeSet; linkedPostCount: number }> {
     const existing = await tagRepository.findById(id);
     if (!existing) throw notFound(ErrorCodes.TAG_NOT_FOUND, "标签不存在");
+    if (existing.version !== version) {
+      throw conflict(ErrorCodes.TAG_CONCURRENT_MODIFICATION, "标签已被其他操作修改，请刷新后重试");
+    }
     const affectedPostSlugs = await tagRepository.findPublishedPostSlugs(id);
-    await tagRepository.delete(id);
+    await tagRepository.delete(id, version);
     return {
       changeSet: { oldSlug: existing.slug, newSlug: existing.slug, affectedPostSlugs },
       linkedPostCount: existing._count.postTags,

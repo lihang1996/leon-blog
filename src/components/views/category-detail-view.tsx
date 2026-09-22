@@ -1,96 +1,43 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useTransition } from "react";
+import type { InitialData } from "@/app/site-shell";
+import { publicQueryHref } from "@/lib/public-query";
 import Link from "next/link";
 import { Header } from "../ui/header";
 import { Footer } from "../ui/footer";
 import { TagBadge, CategoryBadge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { CategoryIllustratedIcon, WavyDivider, CatPeek, CatSleep } from "../ui/cat-doodles";
-import { clientApi, PostItem, CategoryItem, getPostTags } from "@/lib/client-api";
-
-// Fallback categories cache with full metadata so SSR matches DB instantly
-const DEFAULT_CATEGORIES: CategoryItem[] = [
-  { id: "c-fe", name: "前端", slug: "frontend", description: "现代前端技术与架构实践", postCount: 1 },
-  { id: "c-be", name: "后端", slug: "backend", description: "API、数据库与服务器端设计", postCount: 1 },
-  { id: "c-ts", name: "TypeScript", slug: "typescript", description: "类型系统与工程化实践", postCount: 1 },
-];
+import { getPostTags } from "@/lib/client-api";
+import { formatDate } from "@/lib/format";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export function CategoryDetailView({
-  slug: initialSlug,
+  slug: currentSlug,
   initialData,
 }: {
   slug: string;
-  initialData?: {
-    categories?: CategoryItem[];
-    posts?: PostItem[];
-  };
+  initialData?: InitialData;
 }) {
-  const [currentSlug, setCurrentSlug] = useState<string>(initialSlug);
-  const [categories, setCategories] = useState<CategoryItem[]>(() =>
-    initialData?.categories && initialData.categories.length > 0 ? initialData.categories : DEFAULT_CATEGORIES
-  );
-  const [posts, setPosts] = useState<PostItem[]>(() => {
-    if (initialData?.posts && initialData.posts.length > 0) {
-      return initialData.posts.filter((p) => p.category?.slug === initialSlug);
-    }
-    return [];
-  });
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [loading, setLoading] = useState(false);
-
-  // Support browser back/forward buttons
-  useEffect(() => {
-    const handlePopState = () => {
-      const match = window.location.pathname.match(/\/categories\/([^/?#]+)/);
-      if (match && match[1]) {
-        setCurrentSlug(decodeURIComponent(match[1]));
-      }
-    };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
-
-  // Fetch all categories for sidebar
-  useEffect(() => {
-    clientApi.getCategories().then((res) => {
-      if (res.data && res.data.length > 0) {
-        setCategories(res.data);
-      }
-    });
-  }, []);
-
-  // Fetch posts whenever the selected category or page changes.
-  useEffect(() => {
-    let active = true;
-    void clientApi.getPostsByCategory(currentSlug, { page, pageSize: 6 }).then((res) => {
-      if (!active) return;
-      if (res.data) {
-        setPosts(res.data);
-        if (res.meta) {
-          setTotalPages(res.meta.totalPages || 1);
-        }
-      }
-      setLoading(false);
-    });
-    return () => {
-      active = false;
-    };
-  }, [currentSlug, page]);
-
-  // In-page smooth category switch
-  const handleSelectCategory = useCallback((newSlug: string) => {
-    if (newSlug === currentSlug) return;
-    setLoading(true);
-    setCurrentSlug(newSlug);
-    setPage(1);
-    window.history.pushState(null, "", `/categories/${newSlug}`);
-  }, [currentSlug]);
-
-  const category = categories.find((item) => item.slug === currentSlug) ?? null;
-  const catName = category?.name || (currentSlug === "backend" ? "后端" : currentSlug === "frontend" ? "前端" : decodeURIComponent(currentSlug));
-  const catDesc = category?.description || "Next.js、TypeScript 与全栈实践笔记。";
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [loading, startTransition] = useTransition();
+  const categories = initialData?.categories ?? [];
+  const posts = initialData?.posts ?? [];
+  const page = initialData?.query?.page ?? 1;
+  const totalPages = initialData?.pagination?.totalPages ?? 1;
+  const navigate = (slug: string, targetPage: number) => {
+    startTransition(() => router.push(publicQueryHref(`/categories/${encodeURIComponent(slug)}`, new URLSearchParams(searchParams.toString()), {
+      page: targetPage,
+    }), { scroll: false }));
+  };
+  const handleSelectCategory = (slug: string) => {
+    if (slug !== currentSlug) navigate(slug, 1);
+  };
+  const category = initialData?.category;
+  const catName = category?.name || "分类";
+  const catDesc = category?.description || "暂无分类描述";
   const catCount = category?.postCount ?? posts.length;
 
   return (
@@ -109,13 +56,16 @@ export function CategoryDetailView({
           </Link>
         </div>
 
-        {/* Category Header Card */}
+        {/* Category Header with illustrated icon, per redesign-category-detail-desktop.png */}
         <div className="flex items-start gap-5">
-          <div className="w-36 sm:w-44 shrink-0">
-            <CategoryIllustratedIcon iconKey="dev" className="w-full h-auto" />
+          <div className="w-28 sm:w-36 shrink-0">
+            <CategoryIllustratedIcon
+              iconKey={category?.icon || "dev"}
+              className="w-full h-auto"
+            />
           </div>
-          <div className="space-y-1.5 flex-1">
-            <h1 className="text-4xl sm:text-5xl font-extrabold font-serif text-[#1A1A1A] transition-all">
+          <div className="space-y-1.5 flex-1 pt-1">
+            <h1 className="text-4xl sm:text-5xl font-extrabold font-serif text-[#1A1A1A]">
               {catName}
             </h1>
             <p className="text-xs sm:text-sm text-[#6B655C]">
@@ -137,7 +87,7 @@ export function CategoryDetailView({
         {/* Content Layout: Posts List (Left) + Sidebar (Right) */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* Post items list with fixed-bottom pagination */}
-          <div className="lg:col-span-8 w-full min-h-[480px] flex flex-col justify-between">
+          <div className="lg:col-span-8 min-w-0 w-full min-h-[480px] flex flex-col justify-between" aria-busy={loading}>
             {posts.length > 0 ? (
               <div className={`flex-1 flex flex-col justify-between transition-opacity duration-150 ${loading ? "opacity-30" : "opacity-100"}`}>
                 <div className="space-y-6">
@@ -154,13 +104,13 @@ export function CategoryDetailView({
                                 <line x1="8" y1="2" x2="8" y2="6" />
                                 <line x1="3" y1="10" x2="21" y2="10" />
                               </svg>
-                              <span>{post.publishedAt ? post.publishedAt.slice(0, 10) : "2024-05-20"}</span>
+                              <span>{formatDate(post.publishedAt)}</span>
                             </div>
-                            <CategoryBadge name={catName} />
+                            <CategoryBadge name={catName} className="max-w-full whitespace-normal [overflow-wrap:anywhere]" />
                           </div>
 
                           {/* Middle */}
-                          <div className="flex-1 space-y-2">
+                          <div className="flex-1 min-w-0 space-y-2">
                             <Link href={`/posts/${post.slug}`} scroll={false}>
                               <h2 className="text-lg sm:text-xl font-bold font-serif text-[#1A1A1A] group-hover:text-[#E65A00] transition-colors leading-snug">
                                 {post.title}
@@ -208,11 +158,8 @@ export function CategoryDetailView({
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={page <= 1}
-                    onClick={() => {
-                      setLoading(true);
-                      setPage(page - 1);
-                    }}
+                    disabled={loading || page <= 1}
+                    onClick={() => navigate(currentSlug, page - 1)}
                   >
                     上一页
                   </Button>
@@ -222,11 +169,8 @@ export function CategoryDetailView({
                   <Button
                     variant="primary"
                     size="sm"
-                    disabled={page >= totalPages}
-                    onClick={() => {
-                      setLoading(true);
-                      setPage(page + 1);
-                    }}
+                    disabled={loading || page >= totalPages}
+                    onClick={() => navigate(currentSlug, page + 1)}
                   >
                     下一页
                   </Button>
@@ -241,43 +185,40 @@ export function CategoryDetailView({
               <div className="w-full paper-card-dashed p-10 sm:p-14 flex flex-col items-center justify-center text-center space-y-4 min-h-[380px] my-auto">
                 <CatSleep className="w-44 h-32" />
                 <h3 className="text-lg font-bold text-[#1A1A1A]">该分类下暂无文章</h3>
-                <Link href="/posts" scroll={false} className="text-xs font-bold text-[#E65A00] hover:underline">
+                <Button href="/posts" variant="outline" size="sm" className="mt-2">
                   浏览全部文章 →
-                </Link>
+                </Button>
               </div>
             )}
           </div>
 
-          {/* Right Sidebar: Other Categories (Kept fully static without re-mounting) */}
+          {/* Right Sidebar: 同类目录 — solid card, orange outline pills, exclude current */}
           <div className="lg:col-span-4 w-full">
-            <aside className="paper-card-dashed p-6 space-y-6 relative overflow-hidden bg-white/70">
-              <div className="flex items-center gap-2">
+            <aside className="paper-card p-6 space-y-6 relative overflow-hidden">
+              <div className="relative inline-block">
                 <h3 className="text-xl font-bold font-serif text-[#1A1A1A]">
                   同类目录
                 </h3>
-                <span className="text-[#E65A00] text-sm">´</span>
+                <span className="absolute -top-1 -right-4 text-[#E65A00] text-sm" aria-hidden="true">✨</span>
+                <div className="mt-1 h-1 w-14 rounded-full bg-[#E65A00]/80" />
               </div>
 
-              {/* Other Categories List with in-page smooth click */}
               <div className="space-y-2">
-                {categories.map((c) => (
-                  <button
-                    key={c.slug}
-                    type="button"
-                    onClick={() => handleSelectCategory(c.slug)}
-                    className={`w-full flex items-center justify-between px-4 py-2.5 rounded-full border text-xs sm:text-sm font-semibold transition-colors cursor-pointer text-left ${
-                      c.slug === currentSlug
-                        ? "bg-[#FFF5EE] border-[#E65A00] text-[#E65A00]"
-                        : "bg-white border-[#D5C7B2] text-[#3A332C] hover:border-[#E65A00]"
-                    }`}
-                  >
-                    <span>{c.name}</span>
-                    <span className="text-xs text-[#8C8375]">{c.postCount || 0}</span>
-                  </button>
-                ))}
+                {categories
+                  .filter((c) => c.slug !== currentSlug)
+                  .map((c) => (
+                    <button
+                      key={c.slug}
+                      type="button"
+                      onClick={() => handleSelectCategory(c.slug)}
+                      className="w-full flex items-center justify-between px-4 py-2.5 rounded-full border border-[#E65A00] bg-white text-[#E65A00] text-xs sm:text-sm font-semibold transition-colors cursor-pointer text-left hover:bg-[#FFF5EE]"
+                    >
+                      <span>{c.name}</span>
+                      <span className="text-xs text-[#E65A00]/80">{c.postCount || 0}</span>
+                    </button>
+                  ))}
               </div>
 
-              {/* Bottom Peeking Cat */}
               <div className="pt-4 flex items-end justify-between border-t border-[#F0E6D8] relative">
                 <div className="w-12 h-16">
                   <svg viewBox="0 0 50 70" fill="none">

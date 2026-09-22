@@ -3,6 +3,7 @@ import { tagService, updateTagSchema } from "@/modules/tag";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { assertSameOrigin, assertSameOriginJson } from "@/lib/api/same-origin";
 import { assertAdminUuid } from "@/lib/api/admin-id";
+import { parseExpectedVersion } from "@/lib/api/expected-version";
 import { readAdminJsonBody } from "@/lib/api/request-body";
 import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
@@ -40,7 +41,8 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
     ctx.userId = admin.id;
     const { id } = await context.params;
     assertAdminUuid(id);
-    const { changeSet, linkedPostCount } = await tagService.deleteTag(id);
+    const version = parseExpectedVersion(request.headers.get("if-match"));
+    const { changeSet, linkedPostCount } = await tagService.deleteTag(id, version);
     await applyInvalidation(buildTagInvalidationPlan(changeSet), ctx.requestId);
     logger.info("admin.tag.deleted", { requestId: ctx.requestId, tagId: id, linkedPostCount });
     return apiNoContent(ctx);

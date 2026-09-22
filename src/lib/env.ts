@@ -47,7 +47,8 @@ export const siteUrl = runtimeEnv.NEXT_PUBLIC_SITE_URL.replace(/\/+$/, "");
 export const siteName = runtimeEnv.NEXT_PUBLIC_SITE_NAME;
 
 export function getAllowedImageHosts(): string[] {
-  return runtimeEnv.ALLOWED_IMAGE_HOSTS.split(",")
+  const hosts = process.env.NEXT_PUBLIC_ALLOWED_IMAGE_HOSTS ?? runtimeEnv.ALLOWED_IMAGE_HOSTS;
+  return hosts.split(",")
     .map((host) => host.trim().toLowerCase())
     .filter(Boolean);
 }

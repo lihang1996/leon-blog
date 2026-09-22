@@ -44,6 +44,7 @@ function toAdminDetail(row: AdminPostDetailRow): AdminPostDTO {
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    version: row.version,
   };
 }
 
@@ -130,10 +131,13 @@ export const postCommandService = {
   async updatePost(args: {
     postId: string;
     actorId: string;
-    input: { content?: PostContentUpdate; action?: PostStatusAction };
+    input: { content?: PostContentUpdate; action?: PostStatusAction; version: number };
   }): Promise<{ post: AdminPostDTO; changeSet: PostChangeSet }> {
     const existing = await postRepository.findAdminById(args.postId);
     if (!existing) throw notFound(ErrorCodes.POST_NOT_FOUND, "文章不存在");
+    if (existing.version !== args.input.version) {
+      throw conflict(ErrorCodes.POST_CONCURRENT_MODIFICATION, "文章已被其他操作修改，请刷新后重试");
+    }
 
     const oldCategorySlug = await categorySlugOf(existing.categoryId);
     const oldTagSlugs = await tagSlugsOf(existing.postTags.map((pt) => pt.tagId));
@@ -162,10 +166,11 @@ export const postCommandService = {
     // ---- Slug resolution (locked once ever published) -----------------------
     let slug = existing.slug;
     if (content?.slug) {
-      if (!isSlugEditable(existing.publishedAt)) {
+      const requestedSlug = content.slug.trim().toLowerCase();
+      if (!isSlugEditable(existing.publishedAt) && requestedSlug !== existing.slug) {
         throw unprocessable(ErrorCodes.INVALID_POST_TRANSITION, "文章发布后 slug 不可修改");
       }
-      slug = content.slug.trim().toLowerCase();
+      slug = requestedSlug;
       const slugIssues = validateSlug(slug);
       if (slugIssues.length > 0) {
         throw unprocessable(ErrorCodes.VALIDATION_FAILED, slugIssues[0]!.message, slugIssues);
@@ -205,6 +210,7 @@ export const postCommandService = {
     const publishedAt = status === "PUBLISHED" ? (existing.publishedAt ?? new Date()) : existing.publishedAt;
 
     const row = await postRepository.updateInTransaction(existing.id, {
+      expectedVersion: args.input.version,
       ...(content?.title !== undefined ? { title: content.title.trim() } : {}),
       ...(slug !== existing.slug ? { slug } : {}),
       ...(content?.excerpt !== undefined ? { excerpt: content.excerpt.trim() } : {}),
@@ -236,13 +242,19 @@ export const postCommandService = {
   },
 
   /** Only DRAFT posts can be hard-deleted (architecture §7.2). */
-  async deleteDraft(args: { postId: string }): Promise<void> {
+  async deleteDraft(args: { postId: string; version: number }): Promise<void> {
     const existing = await postRepository.findAdminById(args.postId);
     if (!existing) throw notFound(ErrorCodes.POST_NOT_FOUND, "文章不存在");
+    if (existing.version !== args.version) {
+      throw conflict(ErrorCodes.POST_CONCURRENT_MODIFICATION, "文章已被其他操作修改，请刷新后重试");
+    }
     if (!canHardDelete(existing.status)) {
       throw unprocessable(ErrorCodes.INVALID_POST_TRANSITION, "只允许删除草稿");
     }
-    await postRepository.delete(existing.id);
+    const deleted = await postRepository.deleteDraftConditionally(existing.id, args.version);
+    if (!deleted) {
+      throw conflict(ErrorCodes.POST_CONCURRENT_MODIFICATION, "文章状态已变化，请刷新后重试");
+    }
   },
 };
 

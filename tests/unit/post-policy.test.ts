@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { isAllowedImageUrl } from "@/lib/markdown/markdown-policy";
 import {
   canTransition,
   canHardDelete,
@@ -76,10 +77,53 @@ describe("validatePublish", () => {
     expect(issues.some((i) => i.code === "COVER_IMAGE_NOT_ALLOWED")).toBe(true);
   });
 
+  it("also validates images embedded in Markdown content", () => {
+    const issues = validatePublish({
+      ...validInput,
+      contentMd: "正文\n\n![不允许](https://evil.example.com/x.png)",
+      isImageUrlAllowed: (url) => !url.includes("evil.example.com"),
+    });
+    expect(issues.some((i) => i.code === "MARKDOWN_IMAGE_NOT_ALLOWED")).toBe(true);
+  });
+
   it("rejects an inactive author and too many tags", () => {
     const issues = validatePublish({ ...validInput, tagCount: 11, isAuthorActive: false });
     const codes = issues.map((i) => i.code);
     expect(codes).toContain("TOO_MANY_TAGS");
     expect(codes).toContain("AUTHOR_INACTIVE");
+  });
+
+  it("scans actual Markdown images once and returns only one image issue", () => {
+    const policy = vi.fn(() => false);
+    const issues = validatePublish({
+      ...validInput, contentMd: "![one](/images/a.png)\n![two](/images/b.png)", isImageUrlAllowed: policy,
+    });
+    expect(policy).toHaveBeenCalledTimes(1);
+    expect(issues.map((issue) => issue.code)).toEqual(["MARKDOWN_IMAGE_NOT_ALLOWED"]);
+  });
+
+  it("does not reject code and escaped image examples", () => {
+    const policy = vi.fn(() => false);
+    const contentMd = ["```md", "![example](https://evil.example/image.png)", "```", "",
+      "`![inline](https://evil.example/image.png)`", "", String.raw`\![escaped](https://evil.example/image.png)`].join("\n");
+    expect(validatePublish({ ...validInput, contentMd, isImageUrlAllowed: policy })).toEqual([]);
+    expect(policy).not.toHaveBeenCalled();
+  });
+
+  it("does not bypass image policy for a backslash-relative destination", () => {
+    const issues = validatePublish({ ...validInput,
+      contentMd: String.raw`![unsafe](/\evil.example/image.png)`,
+      isImageUrlAllowed: (url) => isAllowedImageUrl(url, new Set()),
+    });
+    expect(issues.map((issue) => issue.code)).toEqual(["MARKDOWN_IMAGE_NOT_ALLOWED"]);
+  });
+
+  it("rejects oversized content before image segmentation", () => {
+    const policy = vi.fn(() => false);
+    const issues = validatePublish({ ...validInput,
+      contentMd: "x".repeat(200 * 1024 + 1) + "\n![unsafe](/image.png)", isImageUrlAllowed: policy,
+    });
+    expect(issues.map((issue) => issue.code)).toEqual(["CONTENT_TOO_LARGE"]);
+    expect(policy).not.toHaveBeenCalled();
   });
 });

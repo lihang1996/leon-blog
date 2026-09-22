@@ -26,6 +26,25 @@ describe("public post list", () => {
     expect(items.map((post) => post.slug)).toEqual(["published"]);
     expect(pagination.total).toBe(1);
   });
+
+  it("applies server-side taxonomy filters, sorting and pagination", async () => {
+    const category = await createCategory("工程", "engineering");
+    await createPost({ authorId, title: "第一篇", slug: "first", excerpt: "a", status: "PUBLISHED", categoryId: category.id, publishedAt: new Date("2026-01-01T00:00:00Z") });
+    await createPost({ authorId, title: "第二篇", slug: "second", excerpt: "a", status: "PUBLISHED", categoryId: category.id, publishedAt: new Date("2026-01-02T00:00:00Z") });
+    await createPost({ authorId, title: "其他", slug: "other", excerpt: "a", status: "PUBLISHED" });
+
+    const page1 = await postQueryService.listPublishedPosts(
+      { page: 1, pageSize: 1 },
+      { categorySlug: "engineering", sort: "latest" },
+    );
+    const page2 = await postQueryService.listPublishedPosts(
+      { page: 2, pageSize: 1 },
+      { categorySlug: "engineering", sort: "latest" },
+    );
+    expect(page1.items.map((post) => post.slug)).toEqual(["second"]);
+    expect(page2.items.map((post) => post.slug)).toEqual(["first"]);
+    expect(page1.pagination).toMatchObject({ total: 2, totalPages: 2 });
+  });
 });
 
 describe("public post detail", () => {
@@ -37,6 +56,21 @@ describe("public post detail", () => {
     expect(await postQueryService.getPublishedPostBySlug("draft")).toBeNull();
     expect(await postQueryService.getPublishedPostBySlug("archived")).toBeNull();
     expect(await postQueryService.getPublishedPostBySlug("published")).not.toBeNull();
+  });
+
+  it("resolves an adjacent published post beyond the first list page", async () => {
+    for (let index = 0; index < 25; index++) {
+      await createPost({
+        authorId,
+        title: `文章 ${index}`,
+        slug: `post-${index}`,
+        excerpt: "a",
+        status: "PUBLISHED",
+        publishedAt: new Date(Date.UTC(2026, 0, index + 1)),
+      });
+    }
+    const neighbor = await postQueryService.getPublishedNeighbor("post-24");
+    expect(neighbor?.slug).toBe("post-23");
   });
 
   it("never returns draft content via the detail DTO", async () => {
@@ -88,5 +122,19 @@ describe("category and tag paths", () => {
     const tags = await tagService.listPublicTags();
     expect(categories.find((c) => c.slug === "empty-cat")).toBeUndefined();
     expect(tags.find((t) => t.slug === "empty-tag")).toBeUndefined();
+  });
+
+  it("orders public tags by published article count", async () => {
+    const frequent = await createTag("高频", "frequent");
+    const rare = await createTag("低频", "rare");
+    await createPost({ authorId, title: "高频一", slug: "frequent-1", excerpt: "a", status: "PUBLISHED", tagIds: [frequent.id] });
+    await createPost({ authorId, title: "高频二", slug: "frequent-2", excerpt: "a", status: "PUBLISHED", tagIds: [frequent.id] });
+    await createPost({ authorId, title: "低频一", slug: "rare-1", excerpt: "a", status: "PUBLISHED", tagIds: [rare.id] });
+
+    const tags = await tagService.listPublicTags();
+    expect(tags.map((tag) => [tag.slug, tag.postCount])).toEqual([
+      ["frequent", 2],
+      ["rare", 1],
+    ]);
   });
 });

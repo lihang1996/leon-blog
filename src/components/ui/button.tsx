@@ -11,6 +11,8 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
   size?: "sm" | "md" | "lg";
   variant?: "primary" | "secondary" | "danger" | "outline" | "ghost";
   pending?: boolean;
+  target?: string;
+  rel?: string;
 };
 
 const variantClasses: Record<NonNullable<Props["variant"]>, string> = {
@@ -31,6 +33,8 @@ export function Button({
   size = "md",
   pending = false,
   href,
+  target,
+  rel,
   className = "",
   children,
   disabled,
@@ -43,7 +47,7 @@ export function Button({
       <span className={`col-start-1 row-start-1 ${pending ? "opacity-0" : ""}`}>{children}</span>
       <span
         aria-hidden="true"
-        className={`col-start-1 row-start-1 inline-flex items-center justify-center gap-2 whitespace-nowrap ${pending ? "" : "opacity-0"}`}
+        className={`col-start-1 row-start-1 inline-flex items-center justify-center gap-2 whitespace-nowrap pointer-events-none ${pending ? "" : "opacity-0"}`}
       >
         <Spinner />
         <span>处理中…</span>
@@ -52,7 +56,11 @@ export function Button({
   );
 
   if (href) {
-    return <Link href={href} className={classes}>{content}</Link>;
+    return (
+      <Link href={href} className={classes} target={target} rel={rel}>
+        {content}
+      </Link>
+    );
   }
 
   return (

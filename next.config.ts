@@ -8,12 +8,21 @@ function parseAllowedImageHosts(): Array<{ protocol: "https"; hostname: string }
   const raw = process.env.ALLOWED_IMAGE_HOSTS ?? "";
   return raw
     .split(",")
-    .map((host) => host.trim())
+    .map((host) => host.trim().toLowerCase())
     .filter(Boolean)
     .map((hostname) => ({ protocol: "https" as const, hostname }));
 }
 
 const nextConfig: NextConfig = {
+  // Non-secret host policy used by the browser renderer. Publish validation is
+  // still authoritative on the server.
+  env: {
+    NEXT_PUBLIC_ALLOWED_IMAGE_HOSTS: process.env.ALLOWED_IMAGE_HOSTS ?? "",
+    // Stable for the whole deployment and refreshed on every build. Keeping
+    // this out of Client Component render avoids Cache Components treating
+    // `new Date()` as request-time IO during prerendering.
+    NEXT_PUBLIC_COPYRIGHT_YEAR: String(new Date().getFullYear()),
+  },
   // Next.js 16 Cache Components (architecture §13.2)
   cacheComponents: true,
   cacheLife: {
@@ -33,13 +42,7 @@ const nextConfig: NextConfig = {
     "@prisma/client",
     "@prisma/adapter-pg",
   ],
-  // Security response headers (architecture §23.4). The CSP is pragmatic:
-  // Next.js injects inline scripts/styles for hydration + the RSC stream, and
-  // Shiki emits inline theme styles in code blocks, so `'unsafe-inline'` is
-  // required for script/style sources. `frame-ancestors 'none'`, `object-src
-  // 'none'`, `base-uri 'self'` and `form-action 'self'` still contain the
-  // largest clickjacking / injection / UI-redress surfaces. Deploy on Vercel
-  // also sets these at the platform level.
+  // Next.js hydration and the RSC stream require inline scripts/styles.
   async headers() {
     const isDev = process.env.NODE_ENV === "development";
     const securityHeaders = [

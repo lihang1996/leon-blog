@@ -46,18 +46,30 @@ async function main() {
   let admin: { id: string };
   if (existing) {
     // Idempotent re-runs must NOT silently reset the existing admin's password
-    // to a new random value. Only an explicitly provided ADMIN_BOOTSTRAP_PASSWORD
-    // (E2E seeding / password recovery) updates it.
-    const data: { displayName: string; isActive: boolean; passwordHash?: string } = {
-      displayName: "Leon",
-      isActive: true,
-    };
+    // to a new random value, re-enable a disabled account, or leave stale
+    // lock/session state. Only an explicit ADMIN_BOOTSTRAP_PASSWORD (E2E /
+    // password recovery) performs a full recovery: new hash, unlock, reactivate,
+    // and bump sessionVersion so old JWTs die.
     if (bootstrapPassword) {
-      data.passwordHash = await hash(bootstrapPassword);
+      await prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          displayName: "Leon",
+          passwordHash: await hash(bootstrapPassword),
+          isActive: true,
+          failedLoginCount: 0,
+          lockedUntil: null,
+          sessionVersion: { increment: 1 },
+        },
+      });
+      console.log(`[seed] admin ${email} recovered via ADMIN_BOOTSTRAP_PASSWORD (sessions invalidated)`);
     } else {
-      console.log(`[seed] admin ${email} already exists — password left unchanged (ADMIN_BOOTSTRAP_PASSWORD not set)`);
+      await prisma.user.update({
+        where: { id: existing.id },
+        data: { displayName: "Leon" },
+      });
+      console.log(`[seed] admin ${email} already exists — password/lock/active left unchanged (ADMIN_BOOTSTRAP_PASSWORD not set)`);
     }
-    await prisma.user.update({ where: { id: existing.id }, data });
     admin = existing;
   } else {
     // First-time create: use the bootstrap password, or generate + print a random one.
@@ -91,7 +103,7 @@ async function main() {
   for (const c of categories) {
     await prisma.category.upsert({
       where: { slug: c.slug },
-      update: { name: c.name, description: c.description, sortOrder: c.sortOrder },
+      update: { name: c.name, description: c.description, sortOrder: c.sortOrder, version: { increment: 1 } },
       create: { name: c.name, slug: c.slug, description: c.description, sortOrder: c.sortOrder },
     });
   }
@@ -112,7 +124,7 @@ async function main() {
   for (const t of tags) {
     await prisma.tag.upsert({
       where: { slug: t.slug },
-      update: { name: t.name },
+      update: { name: t.name, version: { increment: 1 } },
       create: { name: t.name, slug: t.slug },
     });
   }
@@ -150,6 +162,7 @@ async function main() {
     return prisma.post.upsert({
       where: { slug: args.slug },
       update: {
+        version: { increment: 1 },
         title: args.title,
         excerpt: args.excerpt,
         contentMd: args.contentMd,

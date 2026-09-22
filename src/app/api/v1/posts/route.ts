@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { postQueryService } from "@/modules/post";
-import { normalizePageParams } from "@/lib/pagination";
+import { normalizePublicQuery } from "@/lib/public-query";
 import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
 import { apiPaginated } from "@/lib/api/api-response";
@@ -10,11 +10,15 @@ export async function GET(request: NextRequest) {
   const ctx = createRequestContext(request);
   try {
     const { searchParams } = new URL(request.url);
-    const params = normalizePageParams({
-      page: searchParams.get("page"),
-      pageSize: searchParams.get("pageSize"),
+    const query = normalizePublicQuery(Object.fromEntries(
+      ["page", "pageSize", "q", "category", "tag", "sort"].map((key) => [key, searchParams.get(key) ?? undefined]),
+    ));
+    const result = await postQueryService.listPublishedPosts(query, {
+      categorySlug: query.category || undefined,
+      tagSlug: query.tag || undefined,
+      keyword: query.q || undefined,
+      sort: query.sort,
     });
-    const result = await postQueryService.listPublishedPosts(params);
     return apiPaginated(result.items, result.pagination, ctx);
   } catch (error) {
     return handleApiError(error, ctx);

@@ -1,25 +1,11 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { Header } from "../ui/header";
 import { Footer } from "../ui/footer";
 import { TagBadge } from "../ui/badge";
 import { CatStretching, PawIcon } from "../ui/cat-doodles";
-import { clientApi, TagItem } from "@/lib/client-api";
-
-// Fallback tags matching redesign-tags-desktop.png
-const DEFAULT_TAGS: { name: string; slug: string; count: number }[] = [
-  { name: "Next.js", slug: "nextjs", count: 8 },
-  { name: "TypeScript", slug: "typescript", count: 11 },
-  { name: "PostgreSQL", slug: "postgresql", count: 6 },
-  { name: "缓存", slug: "cache", count: 4 },
-  { name: "工程化", slug: "engineering", count: 7 },
-  { name: "Prisma", slug: "prisma", count: 5 },
-  { name: "SEO", slug: "seo", count: 4 },
-  { name: "测试", slug: "testing", count: 6 },
-  { name: "Auth.js", slug: "authjs", count: 2 },
-  { name: "性能", slug: "performance", count: 5 },
-];
+import type { TagItem } from "@/lib/client-api";
 
 export function TagsView({
   initialData,
@@ -28,24 +14,12 @@ export function TagsView({
     tags?: TagItem[];
   };
 }) {
-  const [tags, setTags] = useState<TagItem[]>(() =>
-    initialData?.tags && initialData.tags.length > 0 ? initialData.tags : []
-  );
+  const tags = initialData?.tags ?? [];
 
-  useEffect(() => {
-    clientApi.getTags().then((res) => {
-      if (res.data && res.data.length > 0) {
-        setTags(res.data);
-      }
-    });
-  }, []);
-
-  const displayTags = tags.length > 0
-    ? tags.map((t) => ({ name: t.name, slug: t.slug, count: t.postCount || 0 }))
-    : DEFAULT_TAGS;
+  const displayTags = tags.map((t) => ({ name: t.name, slug: t.slug, count: t.postCount || 0 }));
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#FDFBF7]">
+    <div className="min-h-screen flex flex-col">
       <Header activePath="/tags" />
 
       <main className="page-container flex-1 py-8 sm:py-12 space-y-12 relative animate-tab-fade">
@@ -79,6 +53,11 @@ export function TagsView({
               className="hover:scale-105"
             />
           ))}
+          {displayTags.length === 0 && (
+            <div className="w-full paper-card-dashed p-12 text-center text-sm text-[#8C8375]">
+              暂无公开标签
+            </div>
+          )}
         </div>
 
         {/* Bottom Right Stretching Cat & Footprint Slogan */}

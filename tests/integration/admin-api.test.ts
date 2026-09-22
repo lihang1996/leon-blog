@@ -6,6 +6,7 @@ import { GET as getPost, PATCH as patchPost, DELETE as deletePost } from "@/app/
 import { GET as listCategories, POST as createCategoryApi } from "@/app/api/v1/admin/categories/route";
 import { PATCH as patchCategory, DELETE as deleteCategory } from "@/app/api/v1/admin/categories/[id]/route";
 import { PATCH as patchTag, DELETE as deleteTag } from "@/app/api/v1/admin/tags/[id]/route";
+import { GET as listTags } from "@/app/api/v1/admin/tags/route";
 import { MAX_ADMIN_JSON_BODY_BYTES } from "@/lib/api/request-body";
 import { categoryService } from "@/modules/category";
 import { tagService } from "@/modules/tag";
@@ -67,7 +68,7 @@ describe("admin post API", () => {
         method: "PATCH",
         origin: ORIGIN,
         contentType: "application/json",
-        body: { action: "publish" },
+        body: { action: "publish", version: draft.version },
       }),
       routeContext({ id: draft.id }),
     );
@@ -75,6 +76,7 @@ describe("admin post API", () => {
     const { data: published } = await publish.json();
     expect(published.status).toBe("PUBLISHED");
     expect(published.publishedAt).not.toBeNull();
+    expect(typeof published.version).toBe("number");
   });
 
   it("rejects a request with a forged Origin (403)", async () => {
@@ -125,7 +127,10 @@ describe("admin post API", () => {
     );
     const { data: draft } = await create.json();
 
-    const res = await deletePost(makeRequest(`${BASE}/${draft.id}`, { method: "DELETE", origin: ORIGIN }), routeContext({ id: draft.id }));
+    const listed = await listPosts(makeRequest(`${BASE}?status=DRAFT`));
+    const { data: [baseline] } = await listed.json();
+    expect(baseline.version).toBe(draft.version);
+    const res = await deletePost(makeRequest(`${BASE}/${draft.id}`, { method: "DELETE", origin: ORIGIN, ifMatch: `"${baseline.version}"` }), routeContext({ id: draft.id }));
     expect(res.status).toBe(204);
 
     // The draft is gone — the 404 now carries the standard error envelope
@@ -148,18 +153,70 @@ describe("admin post API", () => {
     expect(res.status).toBe(403);
   });
 
+  it("rejects a stale list baseline on PATCH and DELETE, then accepts a refreshed delete", async () => {
+    mockAdmin();
+    const create = await createPost(
+      makeRequest(BASE, { method: "POST", origin: ORIGIN, contentType: "application/json", body: { title: "草稿", excerpt: "e", contentMd: "# c" } }),
+    );
+    const { data: draft } = await create.json();
+    const list = await listPosts(makeRequest(`${BASE}?status=DRAFT`));
+    const { data: [baseline] } = await list.json();
+    expect(baseline.version).toBe(draft.version);
+    const saved = await patchPost(
+      makeRequest(`${BASE}/${draft.id}`, {
+        method: "PATCH", origin: ORIGIN, contentType: "application/json",
+        body: { content: { title: "已保存" }, version: baseline.version },
+      }),
+      routeContext({ id: draft.id }),
+    );
+    expect(saved.status).toBe(200);
+    const { data: updated } = await saved.json();
+    expect(updated.version).toBe(baseline.version + 1);
+
+    const stalePatch = await patchPost(
+      makeRequest(`${BASE}/${draft.id}`, {
+        method: "PATCH", origin: ORIGIN, contentType: "application/json",
+        body: { content: { title: "过期" }, version: baseline.version },
+      }),
+      routeContext({ id: draft.id }),
+    );
+    expect(stalePatch.status).toBe(409);
+    expect((await stalePatch.json()).error.code).toBe(ErrorCodes.POST_CONCURRENT_MODIFICATION);
+    const staleDelete = await deletePost(
+      makeRequest(`${BASE}/${draft.id}`, { method: "DELETE", origin: ORIGIN, ifMatch: `"${baseline.version}"` }),
+      routeContext({ id: draft.id }),
+    );
+    expect(staleDelete.status).toBe(409);
+    expect((await staleDelete.json()).error.code).toBe(ErrorCodes.POST_CONCURRENT_MODIFICATION);
+
+    const refreshed = await listPosts(makeRequest(`${BASE}?status=DRAFT`));
+    const { data: [current] } = await refreshed.json();
+    expect(current).toMatchObject({ title: "已保存", version: updated.version });
+    const removed = await deletePost(
+      makeRequest(`${BASE}/${draft.id}`, { method: "DELETE", origin: ORIGIN, ifMatch: `"${current.version}"` }),
+      routeContext({ id: draft.id }),
+    );
+    expect(removed.status).toBe(204);
+  });
+
   it("refuses to hard-delete a published post (422)", async () => {
     mockAdmin();
     const create = await createPost(
       makeRequest(BASE, { method: "POST", origin: ORIGIN, contentType: "application/json", body: { title: "已发布", excerpt: "e", contentMd: "# c" } }),
     );
     const { data: draft } = await create.json();
-    await patchPost(
-      makeRequest(`${BASE}/${draft.id}`, { method: "PATCH", origin: ORIGIN, contentType: "application/json", body: { action: "publish" } }),
+    const publish = await patchPost(
+      makeRequest(`${BASE}/${draft.id}`, {
+        method: "PATCH",
+        origin: ORIGIN,
+        contentType: "application/json",
+        body: { action: "publish", version: draft.version },
+      }),
       routeContext({ id: draft.id }),
     );
+    const { data: published } = await publish.json();
 
-    const res = await deletePost(makeRequest(`${BASE}/${draft.id}`, { method: "DELETE", origin: ORIGIN }), routeContext({ id: draft.id }));
+    const res = await deletePost(makeRequest(`${BASE}/${draft.id}`, { method: "DELETE", origin: ORIGIN, ifMatch: `"${published.version}"` }), routeContext({ id: draft.id }));
     expect(res.status).toBe(422);
   });
 });
@@ -169,7 +226,7 @@ describe("category/tag DELETE (bodyless 415 regression)", () => {
     mockAdmin();
     const { category } = await categoryService.createCategory({ name: "待删分类", slug: "to-delete", sortOrder: 0 });
     const res = await deleteCategory(
-      makeRequest(`http://localhost:3000/api/v1/admin/categories/${category.id}`, { method: "DELETE", origin: ORIGIN }),
+      makeRequest(`http://localhost:3000/api/v1/admin/categories/${category.id}`, { method: "DELETE", origin: ORIGIN, ifMatch: `"${category.version}"` }),
       routeContext({ id: category.id }),
     );
     expect(res.status).toBe(204);
@@ -180,7 +237,7 @@ describe("category/tag DELETE (bodyless 415 regression)", () => {
     mockAdmin();
     const { tag } = await tagService.createTag({ name: "待删标签", slug: "to-delete" });
     const res = await deleteTag(
-      makeRequest(`http://localhost:3000/api/v1/admin/tags/${tag.id}`, { method: "DELETE", origin: ORIGIN }),
+      makeRequest(`http://localhost:3000/api/v1/admin/tags/${tag.id}`, { method: "DELETE", origin: ORIGIN, ifMatch: `"${tag.version}"` }),
       routeContext({ id: tag.id }),
     );
     expect(res.status).toBe(204);
@@ -197,13 +254,92 @@ describe("category/tag DELETE (bodyless 415 regression)", () => {
       actorId: author.id,
       input: { title: "带标签文章", slug: "tagged", excerpt: "摘要", contentMd: "# 正文", tagIds: [tag.id] },
     });
-    await postCommandService.updatePost({ postId: created.post.id, actorId: author.id, input: { action: "publish" } });
+    await postCommandService.updatePost({
+      postId: created.post.id,
+      actorId: author.id,
+      input: { action: "publish", version: created.post.version },
+    });
 
-    await deleteTag(makeRequest(`http://localhost:3000/api/v1/admin/tags/${tag.id}`, { method: "DELETE", origin: ORIGIN }), routeContext({ id: tag.id }));
+    await deleteTag(makeRequest(`http://localhost:3000/api/v1/admin/tags/${tag.id}`, { method: "DELETE", origin: ORIGIN, ifMatch: `"${tag.version}"` }), routeContext({ id: tag.id }));
 
     const detail = await postQueryService.getPublishedPostBySlug("tagged");
     expect(detail).not.toBeNull();
     expect(detail!.tags).toHaveLength(0);
+  });
+});
+
+describe("versioned admin writes", () => {
+  it.each([
+    ["posts", deletePost],
+    ["categories", deleteCategory],
+    ["tags", deleteTag],
+  ] as const)("requires a valid If-Match on %s DELETE", async (resource, remove) => {
+    mockAdmin();
+    const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    for (const [ifMatch, status] of [[null, 428], ["", 422], ["0", 422], ['W/"0"', 422], ['"-1"', 422], ['"0", "1"', 422]] as const) {
+      const response = await remove(
+        makeRequest(`${ORIGIN}/api/v1/admin/${resource}/${id}`, { method: "DELETE", origin: ORIGIN, ifMatch }),
+        routeContext({ id }),
+      );
+      expect(response.status).toBe(status);
+      const body = await response.json();
+      expect(body.error.code).toBe(ErrorCodes.VALIDATION_FAILED);
+      expect(body.error.requestId).toBeTruthy();
+    }
+  });
+
+  it.each([
+    ["categories", patchCategory, deleteCategory, listCategories, ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION],
+    ["tags", patchTag, deleteTag, listTags, ErrorCodes.TAG_CONCURRENT_MODIFICATION],
+  ] as const)("uses the client baseline for %s PATCH and DELETE", async (resource, patch, remove, list, conflictCode) => {
+    mockAdmin();
+    const entity = resource === "categories"
+      ? (await categoryService.createCategory({ name: "初始", slug: "baseline", sortOrder: 0 })).category
+      : (await tagService.createTag({ name: "初始", slug: "baseline" })).tag;
+    expect(entity.version).toBe(0);
+    const collectionUrl = `${ORIGIN}/api/v1/admin/${resource}`;
+    const url = `${collectionUrl}/${entity.id}`;
+    const listed = await list(makeRequest(collectionUrl));
+    const { data: [baseline] } = await listed.json();
+    expect(baseline.version).toBe(entity.version);
+
+    for (const version of [undefined, null, -1, 0.5, "0"]) {
+      const invalid = await patch(
+        makeRequest(url, { method: "PATCH", origin: ORIGIN, contentType: "application/json", body: { name: "非法", version } }),
+        routeContext({ id: entity.id }),
+      );
+      expect(invalid.status).toBe(422);
+      expect((await invalid.json()).error.code).toBe(ErrorCodes.VALIDATION_FAILED);
+    }
+
+    const saved = await patch(
+      makeRequest(url, { method: "PATCH", origin: ORIGIN, contentType: "application/json", body: { name: "已保存", version: baseline.version } }),
+      routeContext({ id: entity.id }),
+    );
+    expect(saved.status).toBe(200);
+    const { data: updated } = await saved.json();
+    expect(updated).toMatchObject({ name: "已保存", version: baseline.version + 1 });
+    const stalePatch = await patch(
+      makeRequest(url, { method: "PATCH", origin: ORIGIN, contentType: "application/json", body: { name: "过期", version: baseline.version } }),
+      routeContext({ id: entity.id }),
+    );
+    expect(stalePatch.status).toBe(409);
+    expect((await stalePatch.json()).error.code).toBe(conflictCode);
+    const staleDelete = await remove(
+      makeRequest(url, { method: "DELETE", origin: ORIGIN, ifMatch: `"${baseline.version}"` }),
+      routeContext({ id: entity.id }),
+    );
+    expect(staleDelete.status).toBe(409);
+    expect((await staleDelete.json()).error.code).toBe(conflictCode);
+
+    const refreshed = await list(makeRequest(collectionUrl));
+    const { data: [current] } = await refreshed.json();
+    expect(current).toMatchObject({ name: "已保存", version: updated.version });
+    const removed = await remove(
+      makeRequest(url, { method: "DELETE", origin: ORIGIN, ifMatch: `"${current.version}"` }),
+      routeContext({ id: entity.id }),
+    );
+    expect(removed.status).toBe(204);
   });
 });
 
@@ -220,7 +356,7 @@ describe("admin UUID pre-check and JSON body cap", () => {
             method: "PATCH",
             origin: ORIGIN,
             contentType: "application/json",
-            body: { content: { title: "x", excerpt: "x", contentMd: "x" } },
+            body: { content: { title: "x", excerpt: "x", contentMd: "x" }, version: 0 },
           }),
           routeContext({ id: "not-a-uuid" }),
         ),

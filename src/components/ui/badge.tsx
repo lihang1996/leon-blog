@@ -54,6 +54,10 @@ export interface TagBadgeProps {
   count?: number;
   href?: string;
   active?: boolean;
+  /** Active fill: orange (tags index / related current) or mustard (rare mustard chips). */
+  activeTone?: "orange" | "mustard";
+  /** When false, omit the leading # (sidebars: 热门标签 / 相关标签). Default true. */
+  showHash?: boolean;
   size?: "sm" | "md" | "lg";
   onClick?: () => void;
   className?: string;
@@ -64,6 +68,8 @@ export function TagBadge({
   count,
   href,
   active = false,
+  activeTone = "orange",
+  showHash = true,
   size = "md",
   onClick,
   className = "",
@@ -74,19 +80,25 @@ export function TagBadge({
     lg: "px-5 py-2 text-sm sm:text-base",
   }[size];
 
-  const activeStyles = active
-    ? "bg-[#E65A00] text-white border-[#E65A00] shadow-xs"
-    : "bg-transparent text-[#E65A00] border-[#E65A00] hover:bg-[#FFF5EE]";
+  const activeStyles = !active
+    ? "bg-transparent text-[#E65A00] border-[#E65A00] hover:bg-[#FFF5EE]"
+    : activeTone === "mustard"
+      ? "bg-[#F9D490] text-[#4A2B11] border-[#D9A821] shadow-xs"
+      : "bg-[#E65A00] text-white border-[#E65A00] shadow-xs";
 
   const content = (
     <span
       className={`inline-flex items-center gap-1.5 font-medium rounded-full border transition-colors select-none ${sizeStyles} ${activeStyles} ${className}`}
     >
-      <span>#{name}</span>
+      <span>{showHash ? `#${name}` : name}</span>
       {count !== undefined && (
         <span
           className={`text-xs ${
-            active ? "text-white/80" : "text-[#E65A00]"
+            active
+              ? activeTone === "mustard"
+                ? "text-[#4A2B11]/70"
+                : "text-white/80"
+              : "text-[#E65A00]"
           }`}
         >
           {count}
@@ -125,7 +137,7 @@ export function CategoryBadge({
 }) {
   const badge = (
     <span
-      className={`inline-flex items-center px-3 py-1 text-xs font-semibold rounded-full border border-[#D5C7B2] bg-[#FAF6F0] text-[#554E45] hover:border-[#E65A00] hover:text-[#E65A00] transition-colors ${className}`}
+      className={`inline-flex items-center px-3 py-1 text-xs font-semibold rounded-full border border-[#A8C4A0] bg-transparent text-[#5B7B5A] hover:border-[#E65A00] hover:text-[#E65A00] transition-colors ${className}`}
     >
       {name}
     </span>

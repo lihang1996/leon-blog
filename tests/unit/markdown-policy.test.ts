@@ -6,7 +6,13 @@ import {
   isExternalLink,
   isWithinMarkdownLimit,
   resolveFenceLanguage,
+  extractMarkdownImageUrls,
+  normalizeImageUrl,
+  segmentMarkdownBlocks,
 } from "@/lib/markdown/markdown-policy";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MarkdownContent } from "@/components/ui/markdown-content";
 
 const allowedHosts = new Set(["images.example.com", "avatars.githubusercontent.com"]);
 
@@ -41,6 +47,62 @@ describe("isAllowedImageUrl", () => {
 
   it("matches hostnames case-insensitively", () => {
     expect(isAllowedImageUrl("https://IMAGES.EXAMPLE.COM/p.png", allowedHosts)).toBe(true);
+  });
+
+  it("allows safe site-relative images but rejects protocol-relative paths", () => {
+    expect(isAllowedImageUrl("/images/posts/cover.png", allowedHosts)).toBe(true);
+    expect(isAllowedImageUrl("//evil.example.com/cover.png", allowedHosts)).toBe(false);
+  });
+
+  it("extracts whole-line Markdown image destinations", () => {
+    expect(extractMarkdownImageUrls("![本地](/images/a.png)\n![远程](https://images.example.com/b.png)"))
+      .toEqual(["/images/a.png", "https://images.example.com/b.png"]);
+  });
+
+  it.each([
+    String.raw`/\evil.example/image.png`, String.raw`/images\foo.png`,
+    "https://images.example.com/\nimage.png", "https://images.example.com/\timage.png",
+    String.raw`https:\\images.example.com\image.png`, "/images/\0foo.png",
+    "/%5cevil.example/image.png", "/images/%0afoo.png", "/images/%7ffoo.png",
+    "/a/..//evil.example/image.png", "https://user:pass@images.example.com/image.png",
+  ])("rejects URL parser ambiguities: %s", (url) => {
+    expect(isAllowedImageUrl(url, allowedHosts)).toBe(false);
+    expect(normalizeImageUrl(url, allowedHosts)).toBeNull();
+  });
+
+  it("normalizes safe local and allowlisted destinations", () => {
+    expect(normalizeImageUrl("/images/a/../b.png?q=1#x", allowedHosts)).toBe("/images/b.png?q=1#x");
+    expect(normalizeImageUrl("https://IMAGES.example.com:443/a/../b.png", allowedHosts)).toBe("https://images.example.com/b.png");
+  });
+});
+
+describe("shared minimal Markdown segmentation", () => {
+  const examples = [
+    "```md", "![fenced](https://evil.example/fence.png)", "```", "",
+    "`![inline-code](https://evil.example/code.png)`", "",
+    String.raw`\![escaped](https://evil.example/escaped.png)`, "",
+    "text ![unsupported-inline](https://evil.example/inline.png)", "",
+    "> ![quoted](https://evil.example/quote.png)", "",
+    "- ![list](https://evil.example/list.png)", "",
+    "![actual](/images/a/../real.png)", "",
+    "```", "![unclosed](https://evil.example/unclosed.png)",
+  ].join("\n");
+
+  it("skips code, escapes and unsupported image forms without widening syntax", () => {
+    expect(extractMarkdownImageUrls(examples)).toEqual(["/images/a/../real.png"]);
+    expect(segmentMarkdownBlocks(examples).filter((block) => block.kind === "image")).toHaveLength(1);
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { content: examples }));
+    expect(html.match(/<img /g)).toHaveLength(1);
+    expect(html).toContain('src="/images/real.png"');
+    expect(html).not.toContain('href="https://evil.example/code.png"');
+  });
+
+  it("shows a blocked image instead of silently dropping it", () => {
+    const html = renderToStaticMarkup(createElement(MarkdownContent, {
+      content: String.raw`![blocked](/\evil.example/image.png)`,
+    }));
+    expect(html).not.toContain("<img");
+    expect(html).toContain("图片地址不被允许");
   });
 });
 

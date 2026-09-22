@@ -21,7 +21,8 @@ export async function GET(request: NextRequest) {
       page: searchParams.get("page"),
       pageSize: searchParams.get("pageSize"),
     });
-    const result = await postQueryService.listAdminPosts(params, status);
+    const sort = searchParams.get("sort") === "published" ? "published" : "updated";
+    const result = await postQueryService.listAdminPosts(params, status, sort);
     logger.info("admin.posts.list", { requestId: ctx.requestId, status, page: params.page });
     return apiPaginated(result.items, result.pagination, ctx);
   } catch (error) {

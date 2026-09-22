@@ -3,6 +3,7 @@ import { postQueryService, postCommandService, updatePostSchema } from "@/module
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { assertSameOrigin, assertSameOriginJson } from "@/lib/api/same-origin";
 import { assertAdminUuid } from "@/lib/api/admin-id";
+import { parseExpectedVersion } from "@/lib/api/expected-version";
 import { readAdminJsonBody } from "@/lib/api/request-body";
 import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
@@ -68,7 +69,8 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
     ctx.userId = admin.id;
     const { id } = await context.params;
     assertAdminUuid(id);
-    await postCommandService.deleteDraft({ postId: id });
+    const version = parseExpectedVersion(request.headers.get("if-match"));
+    await postCommandService.deleteDraft({ postId: id, version });
     logger.info("admin.post.deleted", { requestId: ctx.requestId, postId: id });
     return apiNoContent(ctx);
   } catch (error) {

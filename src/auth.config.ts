@@ -11,13 +11,10 @@ export const authConfig = {
     strategy: "jwt",
     maxAge: 12 * 60 * 60, // 12 hours (architecture §11.1)
   },
-  // trustHost: true — required for ANY self-hosted production build (README
-  // `pnpm start`, docker-compose) on non-Vercel/CF platforms. Without it Auth.js
-  // throws `UntrustedHost` on every /api/auth/* request in NODE_ENV=production,
-  // making admin login impossible (FIND-RB-001 fix). Safe here because the CSRF
-  // surface is already contained by same-origin Origin checks on write endpoints
-  // and Auth.js's SameSite=Lax session cookie; we do not rely on the Host header
-  // for any authorization decision (requireAdmin() is the authoritative check).
+  // Retain self-hosted Auth.js compatibility. Production ingress must validate
+  // Host and replace forwarded host/protocol headers used by Auth.js itself.
+  // This is NOT approval to trust forwarded client IPs for authentication limits.
+  // Admin authorization and write-origin checks do not trust these headers.
   trustHost: true,
   pages: {
     signIn: "/admin/login",
@@ -30,11 +27,10 @@ export const authConfig = {
       const isLoggedIn = !!auth?.user;
       const isOnLogin = nextUrl.pathname === "/admin/login";
 
-      if (isOnLogin) {
-        if (isLoggedIn) return Response.redirect(new URL("/admin", nextUrl));
-        return true;
-      }
-      if (nextUrl.pathname.startsWith("/admin")) {
+      // Always let the server login helper check the actual account/session.
+      // A JWT (or an attacker-supplied reason) cannot decide redirect or cleanup.
+      if (isOnLogin) return true;
+      if (nextUrl.pathname === "/admin" || nextUrl.pathname.startsWith("/admin/")) {
         return isLoggedIn; // false → Auth.js redirects to the signIn page
       }
       return true;

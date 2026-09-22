@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import Image from "next/image";
 
 // Standard v2 palette tokens
 export const DOODLE_COLORS = {
@@ -19,11 +20,13 @@ export const DOODLE_COLORS = {
   mustard: "#D9A821",
 };
 
-/** Cat head logo icon */
+/** Cat head logo (matches redesign-home-desktop.png header brand) */
 export function CatLogo({ className = "w-8 h-8" }: { className?: string }) {
   return (
-    <img
-      src="/images/illustrations/cat-logo.png"
+    <Image
+      src="/images/illustrations/v2/home-brand-logo.png"
+      width={40}
+      height={44}
       alt="Leon Blog Logo"
       className={"inline-block select-none object-contain " + className}
       draggable={false}
@@ -208,13 +211,17 @@ export function CatPeek({ className = "w-36 h-28", speech }: { className?: strin
 /**
  * Home Hero Cat & Laptop & Coffee (100% 1:1 match with redesign-home-desktop.png)
  */
-export function CatHero({ className = "w-full max-w-[460px]" }: { className?: string }) {
+export function CatHero({ className = "w-full max-w-[680px]" }: { className?: string }) {
   return (
     <div className={"relative select-none " + className}>
-      <img
-        src="/images/illustrations/cat-hero.png"
+      <Image
+        src="/images/illustrations/v2/home-hero-cat.png"
+        width={695}
+        height={320}
+        sizes="(max-width: 768px) 100vw, 680px"
+        preload
         alt="你好，我是 Leon"
-        className="w-full h-auto object-contain drop-shadow-sm"
+        className="w-full h-auto object-contain"
         draggable={false}
       />
     </div>
@@ -259,6 +266,20 @@ export function PottedPlant({ className = "w-16 h-24" }: { className?: string })
     <img
       src="/images/illustrations/plant-potted.png"
       alt="盆栽"
+      className={"select-none object-contain " + className}
+      draggable={false}
+    />
+  );
+}
+
+/** Posts list row: notebook/doc doodle (from redesign-posts-desktop.png) */
+export function PostDocIcon({ className = "w-10 h-10" }: { className?: string }) {
+  return (
+    <Image
+      src="/images/illustrations/v2/posts-doc-icon.png"
+      width={44}
+      height={44}
+      alt=""
       className={"select-none object-contain " + className}
       draggable={false}
     />
@@ -518,10 +539,10 @@ export function CatPeekSidebar({ className = "w-48 h-auto" }: { className?: stri
 }
 
 /** Home page sidebar: Project evidence window illustration */
-export function ProjectEvidenceWindow({ className = "w-44 h-auto" }: { className?: string }) {
+export function ProjectEvidenceWindow({ className = "w-52 h-auto" }: { className?: string }) {
   return (
     <img
-      src="/images/illustrations/project-evidence-window.png"
+      src="/images/illustrations/v2/home-evidence-window.png"
       alt="作品卡片插画"
       className={"select-none object-contain " + className}
       draggable={false}
@@ -529,7 +550,7 @@ export function ProjectEvidenceWindow({ className = "w-44 h-auto" }: { className
   );
 }
 
-/** Illustrated Category Card Icon */
+/** Illustrated Category Card Icon (v2: cropped from redesign-home-desktop.png) */
 export function CategoryIllustratedIcon({
   iconKey,
   className = "w-20 h-14",
@@ -537,18 +558,42 @@ export function CategoryIllustratedIcon({
   iconKey?: string;
   className?: string;
 }) {
-  let src = "/images/illustrations/cat-dev-laptop.png";
-  if (iconKey === "dev" || iconKey === "development") src = "/images/illustrations/cat-dev-laptop.png";
-  else if (iconKey === "bulb" || iconKey === "thoughts" || iconKey === "product") src = "/images/illustrations/cat-bulb-idea.png";
-  else if (iconKey === "design") src = "/images/illustrations/cat-design-book.png";
-  else if (iconKey === "tool" || iconKey === "tools") src = "/images/illustrations/cat-tool-box.png";
-  else if (iconKey === "plane" || iconKey === "life") src = "/images/illustrations/cat-plane-note.png";
-  else if (iconKey === "coffee" || iconKey === "engineering") src = "/images/illustrations/cat-coffee-cup.png";
+  let src = "/images/illustrations/v2/home-cat-dev.png";
+  if (iconKey === "dev" || iconKey === "development") src = "/images/illustrations/v2/home-cat-dev.png";
+  else if (iconKey === "bulb" || iconKey === "thoughts" || iconKey === "product") src = "/images/illustrations/v2/home-cat-bulb.png";
+  else if (iconKey === "design") src = "/images/illustrations/v2/home-cat-design.png";
+  else if (iconKey === "tool" || iconKey === "tools") src = "/images/illustrations/v2/home-cat-tool.png";
+  else if (iconKey === "plane" || iconKey === "life") src = "/images/illustrations/v2/home-cat-life.png";
+  else if (iconKey === "coffee" || iconKey === "engineering") src = "/images/illustrations/v2/home-cat-dev.png";
 
   return (
     <img
       src={src}
       alt={iconKey || "category"}
+      className={"select-none object-contain " + className}
+      draggable={false}
+    />
+  );
+}
+
+/** Home latest-posts row icon (v2: cropped from redesign-home-desktop.png) */
+export function HomePostRowIcon({
+  index,
+  className = "w-16 h-12",
+}: {
+  index: number;
+  className?: string;
+}) {
+  const srcs = [
+    "/images/illustrations/v2/home-post-1.png",
+    "/images/illustrations/v2/home-post-2.png",
+    "/images/illustrations/v2/home-post-3.png",
+    "/images/illustrations/v2/home-post-4.png",
+  ];
+  return (
+    <img
+      src={srcs[index % srcs.length]}
+      alt=""
       className={"select-none object-contain " + className}
       draggable={false}
     />

@@ -39,6 +39,7 @@ function toPublicDTO(row: PublicCategoryRow): PublicCategoryDTO {
 function toAdminDTO(row: AdminCategoryRow): AdminCategoryDTO {
   return {
     id: row.id,
+    version: row.version,
     name: row.name,
     slug: row.slug,
     description: row.description,
@@ -122,6 +123,9 @@ export const categoryService = {
   ): Promise<{ category: AdminCategoryDTO; changeSet: CategoryChangeSet }> {
     const existing = await categoryRepository.findById(id);
     if (!existing) throw notFound(ErrorCodes.CATEGORY_NOT_FOUND, "分类不存在");
+    if (existing.version !== input.version) {
+      throw conflict(ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION, "分类已被其他操作修改，请刷新后重试");
+    }
 
     const name = (input.name ?? existing.name).trim();
     const slug = (input.slug ?? existing.slug).trim().toLowerCase();
@@ -136,13 +140,17 @@ export const categoryService = {
     }
 
     const affectedPostSlugs = await categoryRepository.findPublishedPostSlugs(id);
-    const row = await categoryRepository.update(id, {
-      name,
-      slug,
-      description,
-      icon: input.icon !== undefined ? input.icon : undefined,
-      sortOrder: input.sortOrder,
-    });
+    const row = await categoryRepository.update(
+      id,
+      {
+        name,
+        slug,
+        description,
+        icon: input.icon !== undefined ? input.icon : undefined,
+        sortOrder: input.sortOrder,
+      },
+      input.version,
+    );
     return {
       category: toAdminDTO(row),
       changeSet: { oldSlug: existing.slug, newSlug: slug, affectedPostSlugs },
@@ -154,14 +162,17 @@ export const categoryService = {
    * The caller surfaces the impact range via the returned affectedPostCount
    * (the UI shows a confirm dialog before calling).
    */
-  async deleteCategory(id: string): Promise<{
+  async deleteCategory(id: string, version: number): Promise<{
     changeSet: CategoryChangeSet;
     affectedPostCount: number;
   }> {
     const existing = await categoryRepository.findById(id);
     if (!existing) throw notFound(ErrorCodes.CATEGORY_NOT_FOUND, "分类不存在");
+    if (existing.version !== version) {
+      throw conflict(ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION, "分类已被其他操作修改，请刷新后重试");
+    }
     const affectedPostSlugs = await categoryRepository.findPublishedPostSlugs(id);
-    await categoryRepository.delete(id);
+    await categoryRepository.delete(id, version);
     return {
       changeSet: { oldSlug: existing.slug, newSlug: existing.slug, affectedPostSlugs },
       affectedPostCount: existing._count.posts,

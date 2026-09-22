@@ -34,8 +34,10 @@ describe("category service", () => {
     const { category } = await categoryService.createCategory({ name: "前端", slug: "frontend", sortOrder: 7 });
     expect(category.slug).toBe("frontend");
     expect(category.sortOrder).toBe(7);
+    expect(category.version).toBe(0);
 
-    const updated = await categoryService.updateCategory(category.id, { name: "前端工程", slug: "frontend-eng" });
+    const updated = await categoryService.updateCategory(category.id, { name: "前端工程", slug: "frontend-eng", version: category.version });
+    expect(updated.category.version).toBe(category.version + 1);
     expect(updated.category.name).toBe("前端工程");
     expect(updated.category.slug).toBe("frontend-eng");
     expect(updated.changeSet.oldSlug).toBe("frontend");
@@ -65,7 +67,7 @@ describe("category service", () => {
     const { category } = await categoryService.createCategory({ name: "后端", slug: "backend", sortOrder: 0 });
     const post = await createPost({ authorId, title: "文章", slug: "in-backend", excerpt: "a", status: "PUBLISHED", categoryId: category.id });
 
-    const result = await categoryService.deleteCategory(category.id);
+    const result = await categoryService.deleteCategory(category.id, category.version);
     expect(result.affectedPostCount).toBeGreaterThanOrEqual(1);
 
     // Post still exists, category cleared.
@@ -73,15 +75,64 @@ describe("category service", () => {
     expect(detail?.category).toBeNull();
     expect(post.slug).toBe("in-backend");
   });
+
+  it("returns the empty public detail for a category with no published posts", async () => {
+    await categoryService.createCategory({ name: "空分类", slug: "empty-cat", sortOrder: 0 });
+    const row = await categoryService.getPublicCategoryBySlug("empty-cat");
+    expect(row).not.toBeNull();
+    expect(row!.postCount).toBe(0);
+  });
+
+  it("rejects stale category updates and deletes without changing the saved version", async () => {
+    const { category } = await categoryService.createCategory({ name: "并发", slug: "race-cat", sortOrder: 0 });
+    const [baseline] = await categoryService.listAdminCategories();
+    expect(baseline!.version).toBe(category.version);
+    const saved = await categoryService.updateCategory(category.id, { name: "并发甲", version: baseline!.version });
+
+    await expectError(
+      categoryService.updateCategory(category.id, { name: "并发乙", version: baseline!.version }),
+      ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION,
+      409,
+    );
+    await expectError(
+      categoryService.deleteCategory(category.id, baseline!.version),
+      ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION,
+      409,
+    );
+    expect(await categoryService.getAdminCategory(category.id)).toMatchObject({ name: "并发甲", version: saved.category.version });
+    await categoryService.deleteCategory(category.id, saved.category.version);
+  });
+
+  it("conditionally updates and deletes categories at the repository boundary", async () => {
+    const { category } = await categoryService.createCategory({ name: "条件", slug: "conditional-cat", sortOrder: 0 });
+    const updated = await categoryRepository.update(category.id, { name: "已保存" }, category.version);
+    expect(updated).toMatchObject({ name: "已保存", version: category.version + 1 });
+    await expectError(
+      categoryRepository.update(category.id, { name: "过期" }, category.version),
+      ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION,
+      409,
+    );
+    await expectError(categoryRepository.delete(category.id, category.version), ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION, 409);
+    expect(await categoryRepository.findById(category.id)).toMatchObject({ name: "已保存", version: updated.version });
+    await categoryRepository.delete(category.id, updated.version);
+  });
+
+  it("maps delete-after-delete to 404 instead of 500", async () => {
+    const { category } = await categoryService.createCategory({ name: "将删", slug: "to-delete", sortOrder: 0 });
+    await categoryService.deleteCategory(category.id, category.version);
+    await expectError(categoryService.deleteCategory(category.id, category.version), ErrorCodes.CATEGORY_NOT_FOUND, 404);
+  });
 });
 
 describe("tag service", () => {
   it("creates and updates a tag", async () => {
     const { tag } = await tagService.createTag({ name: "React", slug: "react" });
     expect(tag.slug).toBe("react");
+    expect(tag.version).toBe(0);
 
-    const updated = await tagService.updateTag(tag.id, { slug: "react-19" });
+    const updated = await tagService.updateTag(tag.id, { slug: "react-19", version: tag.version });
     expect(updated.tag.slug).toBe("react-19");
+    expect(updated.tag.version).toBe(tag.version + 1);
   });
 
   it("rejects a duplicate tag slug with 409", async () => {
@@ -100,11 +151,42 @@ describe("tag service", () => {
     );
   });
 
+  it("rejects stale tag updates and deletes without changing the saved version", async () => {
+    const { tag } = await tagService.createTag({ name: "并发", slug: "race-tag" });
+    const [baseline] = await tagService.listAdminTags();
+    expect(baseline!.version).toBe(tag.version);
+    const saved = await tagService.updateTag(tag.id, { name: "并发甲", version: baseline!.version });
+    await expectError(
+      tagService.updateTag(tag.id, { name: "并发乙", version: baseline!.version }),
+      ErrorCodes.TAG_CONCURRENT_MODIFICATION,
+      409,
+    );
+    await expectError(tagService.deleteTag(tag.id, baseline!.version), ErrorCodes.TAG_CONCURRENT_MODIFICATION, 409);
+    expect(await tagService.listAdminTags()).toEqual([saved.tag]);
+    await tagService.deleteTag(tag.id, saved.tag.version);
+  });
+
+  it("conditionally updates and deletes tags at the repository boundary", async () => {
+    const { tag } = await tagService.createTag({ name: "条件", slug: "conditional-tag" });
+    const updated = await tagRepository.update(tag.id, { name: "已保存" }, tag.version);
+    expect(updated).toMatchObject({ name: "已保存", version: tag.version + 1 });
+    await expectError(tagRepository.update(tag.id, { name: "过期" }, tag.version), ErrorCodes.TAG_CONCURRENT_MODIFICATION, 409);
+    await expectError(tagRepository.delete(tag.id, tag.version), ErrorCodes.TAG_CONCURRENT_MODIFICATION, 409);
+    expect(await tagRepository.findById(tag.id)).toMatchObject({ name: "已保存", version: updated.version });
+    await tagRepository.delete(tag.id, updated.version);
+  });
+
+  it("maps delete-after-delete to 404 instead of 500", async () => {
+    const { tag } = await tagService.createTag({ name: "将删", slug: "to-delete" });
+    await tagService.deleteTag(tag.id, tag.version);
+    await expectError(tagService.deleteTag(tag.id, tag.version), ErrorCodes.TAG_NOT_FOUND, 404);
+  });
+
   it("removes only the post↔tag links on delete", async () => {
     const { tag } = await tagService.createTag({ name: "Prisma", slug: "prisma" });
     const post = await createPost({ authorId, title: "文章", slug: "with-tag", excerpt: "a", status: "PUBLISHED", tagIds: [tag.id] });
 
-    const result = await tagService.deleteTag(tag.id);
+    const result = await tagService.deleteTag(tag.id, tag.version);
     expect(result.linkedPostCount).toBeGreaterThanOrEqual(1);
 
     const detail = await postQueryService.getPublishedPostBySlug("with-tag");

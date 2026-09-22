@@ -44,11 +44,21 @@ const contentFields = {
 
 export const createPostSchema = z.object(contentFields);
 
+// Defaults belong to create semantics only. Reusing `tagIds.default([])` under
+// `.partial()` makes an omitted PATCH field materialize as [], silently
+// clearing every tag on title-only updates.
+const updateContentFields = {
+  ...contentFields,
+  tagIds: z.array(z.string().uuid()).max(MAX_TAGS_PER_POST).optional(),
+} as const;
+
 /** PATCH body: any combination of content fields plus an optional status action. */
 export const updatePostSchema = z
   .object({
-    content: z.object(contentFields).partial().optional(),
+    content: z.object(updateContentFields).partial().optional(),
     action: z.enum(["publish", "archive", "restore"]).optional(),
+    /** Base version the client loaded; required so stale tabs get 409 instead of silent overwrite. */
+    version: z.number().int().nonnegative().max(2_147_483_647),
   })
   .refine((value) => value.content !== undefined || value.action !== undefined, {
     message: "至少需要提供内容字段或状态操作",

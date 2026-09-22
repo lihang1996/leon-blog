@@ -1,6 +1,9 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import type { InitialData } from "@/app/site-shell";
+import { normalizePublicQuery, publicQueryHref } from "@/lib/public-query";
 import Link from "next/link";
 import { Header } from "../ui/header";
 import { Footer } from "../ui/footer";
@@ -13,7 +16,8 @@ import {
   SparkleStar,
   PawIcon,
 } from "../ui/cat-doodles";
-import { clientApi, PostItem, getPostTags } from "@/lib/client-api";
+import { getPostTags } from "@/lib/client-api";
+import { formatDateDash } from "@/lib/format";
 
 function HighlightText({ text, query }: { text: string; query: string }) {
   const needle = query.trim();
@@ -23,77 +27,31 @@ function HighlightText({ text, query }: { text: string; query: string }) {
   return <>{text.slice(0, index)}<mark className="rounded bg-[#F9D490]/80 px-0.5 text-inherit">{text.slice(index, index + needle.length)}</mark>{text.slice(index + needle.length)}</>;
 }
 
-export function SearchView() {
-  const [query, setQuery] = useState("");
-  const [activeQuery, setActiveQuery] = useState("");
-  const [results, setResults] = useState<PostItem[]>([]);
-  const [searchTime, setSearchTime] = useState(0.02);
-  const [searched, setSearched] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [totalResults, setTotalResults] = useState(0);
-
-  const executeSearch = async (searchTerm: string, targetPage = 1) => {
-    const normalizedTerm = searchTerm.trim().slice(0, 50);
-    if (!normalizedTerm) {
-      setQuery("");
-      setActiveQuery("");
-      setResults([]);
-      setSearched(false);
-      setPage(1);
-      window.history.replaceState(null, "", "/search");
-      return;
-    }
-
-    setLoading(true);
-    setQuery(normalizedTerm);
-    setActiveQuery(normalizedTerm);
-    const searchUrl = new URL(window.location.href);
-    searchUrl.searchParams.set("q", normalizedTerm);
-    if (targetPage > 1) searchUrl.searchParams.set("page", String(targetPage));
-    else searchUrl.searchParams.delete("page");
-    window.history.replaceState(null, "", `${searchUrl.pathname}${searchUrl.search}`);
-    const start = performance.now();
-    try {
-      const [res] = await Promise.all([
-        clientApi.searchPosts(normalizedTerm, { page: targetPage, pageSize: 6 }),
-        new Promise((r) => setTimeout(r, 200)),
-      ]);
-      const end = performance.now();
-      setSearchTime(Math.max(0.01, Number(((end - start) / 1000).toFixed(2))));
-      setSearched(true);
-      setPage(targetPage);
-
-      if (res.data) {
-        setResults(res.data);
-        if (res.meta) {
-          setTotalPages(res.meta.totalPages || 1);
-          setTotalResults(res.meta.total);
-        } else {
-          setTotalResults(res.data.length);
-        }
-      }
-    } finally {
-      setLoading(false);
-    }
+export function SearchView({ initialData }: { initialData?: InitialData }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [loading, startTransition] = useTransition();
+  const normalizedQuery = initialData?.query ?? normalizePublicQuery({}, 6);
+  const activeQuery = normalizedQuery.q;
+  const results = initialData?.posts ?? [];
+  const page = normalizedQuery.page;
+  const totalPages = initialData?.pagination?.totalPages ?? 1;
+  const totalResults = initialData?.pagination?.total ?? 0;
+  const searched = Boolean(activeQuery);
+  const queryKey = JSON.stringify(normalizedQuery);
+  const [draft, setDraft] = useState({ source: queryKey, value: activeQuery });
+  if (draft.source !== queryKey) setDraft({ source: queryKey, value: activeQuery });
+  const query = draft.source === queryKey ? draft.value : activeQuery;
+  const executeSearch = (searchTerm: string, targetPage = 1) => {
+    const q = searchTerm.trim().slice(0, 50);
+    setDraft({ source: queryKey, value: q });
+    startTransition(() => router.push(publicQueryHref("/search", new URLSearchParams(searchParams.toString()), {
+      q,
+      page: q ? targetPage : 1,
+    }), { scroll: false }));
   };
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const q = params.get("q");
-      if (q) {
-        queueMicrotask(() => {
-          setQuery(q);
-          void executeSearch(q);
-        });
-      }
-    }
-  }, []);
-
-  const handleSearch = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleSearch = (event: React.FormEvent) => {
+    event.preventDefault();
     executeSearch(query);
   };
 
@@ -124,7 +82,8 @@ export function SearchView() {
             <input
               type="text"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => setDraft({ source: queryKey, value: e.target.value })}
+              aria-label="搜索标题与摘要"
               maxLength={50}
               placeholder="输入关键词..."
               className="w-full pl-5 pr-12 py-3.5 text-sm sm:text-base rounded-full bg-white border border-[#D5C7B2] text-[#1A1A1A] placeholder-[#9E9589] shadow-xs focus:border-[#E65A00] focus:outline-none"
@@ -139,7 +98,10 @@ export function SearchView() {
             ) : query.trim() ? (
               <button
                 type="button"
-                onClick={() => setQuery("")}
+                onClick={() => {
+                  setDraft({ source: queryKey, value: "" });
+                  executeSearch("");
+                }}
                 className="absolute right-3.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center text-[#8C8375] hover:text-[#E65A00] hover:bg-[#FFF5EE] transition-colors cursor-pointer"
                 title="清空搜索内容"
                 aria-label="清空搜索内容"
@@ -169,15 +131,15 @@ export function SearchView() {
 
         {/* Results Stats */}
         {searched && (
-          <div className="text-xs sm:text-sm text-[#8C8375] font-medium">
-            “{activeQuery}” 找到 {totalResults} 篇结果（用时 {searchTime} 秒）
+          <div className="text-xs sm:text-sm text-[#8C8375] font-medium" aria-live="polite">
+            “{activeQuery}” 找到 {totalResults} 篇结果
           </div>
         )}
 
         {/* Content Layout: Results (Left) + Cat Magnifier Illustration (Right) */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* Results List with min-height */}
-          <div className="lg:col-span-8 w-full min-h-[480px]">
+          <div className="lg:col-span-8 min-w-0 w-full min-h-[480px]" aria-busy={loading}>
             {!searched && !loading ? (
               <div className="w-full paper-card-dashed p-10 sm:p-14 flex flex-col items-center justify-center text-center space-y-4 min-h-[380px]">
                 <CatMagnifier className="w-36 h-auto lg:hidden" />
@@ -214,12 +176,12 @@ export function SearchView() {
                               <line x1="8" y1="2" x2="8" y2="6" />
                               <line x1="3" y1="10" x2="21" y2="10" />
                             </svg>
-                            <span>{post.publishedAt ? post.publishedAt.slice(0, 10) : "2024-05-18"}</span>
+                            <span>{formatDateDash(post.publishedAt)}</span>
                           </div>
                         </div>
 
                         {/* Title, Excerpt & Tags */}
-                        <div className="flex-1 space-y-2">
+                        <div className="flex-1 min-w-0 space-y-2">
                           <Link href={`/posts/${post.slug}`}>
                             <h2 className="text-lg sm:text-xl font-bold font-serif text-[#1A1A1A] group-hover:text-[#E65A00] transition-colors leading-snug">
                               <HighlightText text={post.title} query={activeQuery} />
@@ -260,8 +222,8 @@ export function SearchView() {
                   </div>
                 ))}
 
-                {/* Pagination */}
-                <div className="flex items-center justify-center gap-4 pt-6">
+                {/* Pagination: 上一页 outlined + 下一页 solid, per redesign-search-desktop.png */}
+                <div className="flex items-center justify-center gap-3 pt-6">
                   <Button
                     variant="outline"
                     size="sm"
@@ -284,9 +246,9 @@ export function SearchView() {
               <div className="w-full paper-card-dashed p-10 sm:p-14 flex flex-col items-center justify-center text-center space-y-4 min-h-[380px]">
                 <CatSleep className="w-48 h-36" />
                 <h3 className="text-xl font-bold font-serif text-[#1A1A1A]">没有找到相关文章</h3>
-                <Link href="/posts" className="text-sm font-bold text-[#E65A00] hover:underline">
+                <Button href="/posts" variant="outline" size="sm" className="mt-2">
                   浏览全部文章 →
-                </Link>
+                </Button>
               </div>
             )}
           </div>

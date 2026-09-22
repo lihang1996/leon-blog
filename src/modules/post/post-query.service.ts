@@ -7,6 +7,7 @@ import {
   type PublicPostDetailRow,
   type AdminPostListRow,
   type AdminPostDetailRow,
+  type PublicPostFilters,
 } from "./post.repository";
 import {
   type PublicPostSummaryDTO,
@@ -16,6 +17,7 @@ import {
 } from "./post.dto";
 import { CACHE_TAGS } from "@/lib/cache/cache-invalidation";
 import { computePagination, type PageParams } from "@/lib/pagination";
+import { normalizePublicPage, normalizePublicQuery } from "@/lib/public-query";
 import type { PostStatus } from "./post-policy";
 
 /**
@@ -73,6 +75,7 @@ function toAdminListItem(row: AdminPostListRow): AdminPostListItemDTO {
     tagIds: tagIdsOf(row),
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
     updatedAt: row.updatedAt.toISOString(),
+    version: row.version,
   };
 }
 
@@ -95,16 +98,21 @@ function toAdminDetail(row: AdminPostDetailRow): AdminPostDTO {
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    version: row.version,
   };
 }
 
 // ---- Public cached reads ----------------------------------------------------
 
-async function listPublishedPostsCached(params: PageParams) {
+async function listPublishedPostsCached(params: PageParams, filters: Omit<PublicPostFilters, "keyword">) {
   "use cache";
   cacheLife("blog");
-  cacheTag(CACHE_TAGS.posts);
-  const { items, total } = await postRepository.findPublishedPage(params);
+  cacheTag(
+    CACHE_TAGS.posts,
+    ...(filters.categorySlug ? [CACHE_TAGS.category(filters.categorySlug)] : []),
+    ...(filters.tagSlug ? [CACHE_TAGS.tag(filters.tagSlug)] : []),
+  );
+  const { items, total } = await postRepository.findPublishedPage(params, filters);
   return { items: items.map(toPublicSummary), pagination: computePagination(params.page, params.pageSize, total) };
 }
 
@@ -114,6 +122,14 @@ async function getPublishedPostBySlugCached(slug: string) {
   cacheTag(CACHE_TAGS.posts, CACHE_TAGS.post(slug));
   const row = await postRepository.findPublishedBySlug(slug);
   return row ? toPublicDetail(row) : null;
+}
+
+async function getPublishedNeighborCached(slug: string) {
+  "use cache";
+  cacheLife("blog");
+  cacheTag(CACHE_TAGS.posts, CACHE_TAGS.post(slug));
+  const row = await postRepository.findPublishedNeighbor(slug);
+  return row ? toPublicSummary(row) : null;
 }
 
 async function listPublishedByCategoryCached(categorySlug: string, params: PageParams) {
@@ -142,26 +158,63 @@ async function listLatestPublishedCached(limit: number) {
 }
 
 export const postQueryService = {
-  listPublishedPosts: listPublishedPostsCached,
+  async listPublishedPosts(params: PageParams, filters: PublicPostFilters = {}) {
+    const page = normalizePublicPage(params);
+    const query = normalizePublicQuery({
+      q: filters.keyword,
+      category: filters.categorySlug,
+      tag: filters.tagSlug,
+      sort: filters.sort,
+    });
+    const normalizedFilters = {
+      categorySlug: query.category || undefined,
+      tagSlug: query.tag || undefined,
+      sort: query.sort,
+    };
+    // Branch BEFORE the cached function: arbitrary search text must never be
+    // serialized into a Cache Components key (even on the filtered posts list).
+    if (query.q) {
+      const { items, total } = await postRepository.findPublishedPage(page, {
+        ...normalizedFilters,
+        keyword: query.q,
+      });
+      return { items: items.map(toPublicSummary), pagination: computePagination(page.page, page.pageSize, total) };
+    }
+    return listPublishedPostsCached(page, normalizedFilters);
+  },
   getPublishedPostBySlug: getPublishedPostBySlugCached,
-  listPostsByCategory: listPublishedByCategoryCached,
-  listPostsByTag: listPublishedByTagCached,
-  listLatestPublishedPosts: listLatestPublishedCached,
+  getPublishedNeighbor: getPublishedNeighborCached,
+  listPostsByCategory(categorySlug: string, params: PageParams) {
+    return listPublishedByCategoryCached(categorySlug, normalizePublicPage(params));
+  },
+  listPostsByTag(tagSlug: string, params: PageParams) {
+    return listPublishedByTagCached(tagSlug, normalizePublicPage(params));
+  },
+  listLatestPublishedPosts(limit: number) {
+    return listLatestPublishedCached(normalizePublicPage({ page: 1, pageSize: limit }).pageSize);
+  },
 
   // ---- Dynamic reads (never cached) ----------------------------------------
 
   async searchPublishedPosts(keyword: string, params: PageParams) {
-    const { items, total } = await postRepository.searchPublished(keyword, params);
-    return { items: items.map(toPublicSummary), pagination: computePagination(params.page, params.pageSize, total) };
+    const page = normalizePublicPage(params);
+    const { q } = normalizePublicQuery({ q: keyword });
+    if (!q) return { items: [], pagination: computePagination(page.page, page.pageSize, 0) };
+    const { items, total } = await postRepository.searchPublished(q, page);
+    return { items: items.map(toPublicSummary), pagination: computePagination(page.page, page.pageSize, total) };
   },
 
   // ---- Admin reads (never cached) -------------------------------------------
 
-  async listAdminPosts(params: PageParams, status: PostStatus | "ALL"): Promise<{
+  async listAdminPosts(
+    params: PageParams,
+    status: PostStatus | "ALL",
+    sort: "published" | "updated" = "updated",
+  ): Promise<{
     items: AdminPostListItemDTO[];
     pagination: ReturnType<typeof computePagination>;
   }> {
-    const { items, total } = await postRepository.listAdminPage(params, status);
+    const { items, total } = await postRepository.listAdminPage(params, status, sort);
     return { items: items.map(toAdminListItem), pagination: computePagination(params.page, params.pageSize, total) };
   },
 

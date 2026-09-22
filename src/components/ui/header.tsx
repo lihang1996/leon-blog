@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { CatAvatar, CatLogo, PawIcon, NavUnderline, PottedPlant } from "./cat-doodles";
 
@@ -18,6 +19,8 @@ export function Header({
   userName = "Leon",
   onLogout,
 }: HeaderProps) {
+  const pathname = usePathname();
+  const isHome = pathname === "/";
   const [mobileOpen, setMobileOpen] = useState(false);
 
   interface NavLink {
@@ -63,7 +66,7 @@ export function Header({
             </>
           ) : (
             <>
-              <CatLogo className="w-9 h-9" />
+              <PawIcon className="w-7 h-7 text-[#E65A00]" />
               <span className="font-serif tracking-tight text-xl">Leon 的博客</span>
             </>
           )}
@@ -79,7 +82,7 @@ export function Header({
                 href={link.href}
                 aria-current={active ? "page" : undefined}
                 className={`relative min-h-11 py-2 text-base font-semibold transition-colors flex items-center gap-1.5 ${
-                  active && link.id === "search" ? "rounded-full bg-[#E65A00] px-5 text-white" : active ? "text-[#E65A00]" : "text-[#3D3832] hover:text-[#E65A00]"
+                  active ? "text-[#E65A00]" : "text-[#3D3832] hover:text-[#E65A00]"
                 }`}
               >
                 {link.id === "search" && (
@@ -89,7 +92,7 @@ export function Header({
                   </svg>
                 )}
                 <span>{link.label}</span>
-                {active && link.id !== "search" && (
+                {active && (
                   <span className="absolute -bottom-1 left-0 right-0 w-full h-1.5 flex justify-center animate-fade-in pointer-events-none">
                     <NavUnderline className="w-full h-1.5 text-[#E65A00]" />
                   </span>
@@ -112,7 +115,7 @@ export function Header({
               rel="noreferrer"
               className="text-sm font-bold text-[#E65A00] hover:underline flex items-center gap-0.5"
             >
-              <span>查看博客</span>
+              <span>查看站点</span>
               <span>↗</span>
             </Link>
             <button
@@ -128,15 +131,26 @@ export function Header({
           </div>
         )}
 
-        {!admin && activePath === "/" && (
-          <div className="hidden md:flex items-center gap-5">
-            <svg className="h-7 w-7 text-[#3A332C]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1" /></svg>
-            <CatAvatar className="h-10 w-10" />
+        {!admin && isHome && (
+          <div className="hidden md:flex items-center gap-4">
+            {/* Home mockup: sun + avatar */}
+            <svg
+              className="h-6 w-6 text-[#3A332C]"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="3.5" />
+              <path d="M12 2v2.2M12 19.8V22M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M2 12h2.2M19.8 12H22M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6" />
+            </svg>
+            <CatAvatar className="h-9 w-9" />
           </div>
         )}
 
-        {!admin && activePath !== "/" && (
-          <PottedPlant className="hidden h-16 w-20 object-contain md:block" />
+        {!admin && !isHome && (
+          <PottedPlant className="hidden h-14 w-16 object-contain md:block" />
         )}
 
         {/* Mobile menu toggle */}
@@ -160,7 +174,7 @@ export function Header({
 
       {/* Mobile Drawer Menu */}
       {mobileOpen && (
-        <div className="md:hidden border-t border-[#E2D6C5] bg-[#FDFBF7] px-4 py-4 space-y-3">
+        <div className="md:hidden border-t border-[#E2D6C5] bg-[var(--color-bg)] px-4 py-4 space-y-3">
           <nav className="flex flex-col space-y-2">
             {links.map((link) => {
               const active = isActive(link.href, link.id);
@@ -191,7 +205,7 @@ export function Header({
                 className="text-xs font-bold text-[#E65A00]"
                 onClick={() => setMobileOpen(false)}
               >
-                查看博客 ↗
+                查看站点 ↗
               </Link>
               <button
                 type="button"

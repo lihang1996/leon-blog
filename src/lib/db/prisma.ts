@@ -49,6 +49,11 @@ export function isUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "P2002";
 }
 
+/** Prisma "record to update/delete not found" (including optimistic-lock misses). */
+export function isNotFoundViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "P2025";
+}
+
 /**
  * The first field of the violated unique constraint. With the pg driver
  * adapter (architecture §8.4) the field names live under

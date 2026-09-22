@@ -1,73 +1,106 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Header } from "../../ui/header";
 import { Button } from "../../ui/button";
 import { StatusBadge } from "../../ui/badge";
 import { Modal } from "../../ui/modal";
 import { CatPeek, PawIcon, SparkleStar, TitleBrushUnderline } from "../../ui/cat-doodles";
-import { clientApi, PostItem } from "@/lib/client-api";
+import { clientApi, type AdminPostItem } from "@/lib/client-api";
 import { formatDateTime } from "@/lib/format";
 
 export function AdminPostsView() {
-  const [allPosts, setAllPosts] = useState<PostItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"ALL" | "DRAFT" | "PUBLISHED" | "ARCHIVED">("ALL");
   const [sortBy, setSortBy] = useState<"latest" | "updated">("latest");
-  const [deleteTarget, setDeleteTarget] = useState<PostItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AdminPostItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+  const [page, setPage] = useState(1);
+  const [revision, setRevision] = useState(0);
+  const [result, setResult] = useState<{ key: string; posts: AdminPostItem[]; totalPages: number; error: string | null } | null>(null);
+  const [counts, setCounts] = useState<{ total: number | null; drafts: number | null; published: number | null; archived: number | null }>({ total: null, drafts: null, published: null, archived: null });
+  const [countsError, setCountsError] = useState(false);
+  const key = `${activeTab}:${page}:${sortBy}:${revision}`;
+  const loading = result?.key !== key;
+  const listError = !loading ? result?.error : null;
+  const allPosts = !loading && !listError ? result?.posts ?? [] : [];
+  const totalPages = !loading && !listError ? result?.totalPages ?? 1 : 1;
+  const lifecycle = useRef(0);
+  const deletingRef = useRef(false);
 
-  useEffect(() => {
-    let active = true;
-    void clientApi.getAdminPosts({ status: "ALL", pageSize: 100 }).then((res) => {
-      if (!active) return;
-      if (res.data) setAllPosts(res.data);
-      setLoading(false);
-    });
+  useLayoutEffect(() => {
+    lifecycle.current += 1;
     return () => {
-      active = false;
+      // Mark preserved results stale for the next Activity reveal.
+      setRevision((value) => value + 1);
+      lifecycle.current += 1;
+      deletingRef.current = false;
+      setDeleting(false);
+      setDeleteTarget(null);
     };
   }, []);
 
-  const counts = useMemo(() => {
-    const total = allPosts.length;
-    const drafts = allPosts.filter((p) => p.status === "DRAFT").length;
-    const published = allPosts.filter((p) => p.status === "PUBLISHED").length;
-    const archived = allPosts.filter((p) => p.status === "ARCHIVED").length;
-    return { total, drafts, published, archived };
-  }, [allPosts]);
-
-  const displayedPosts = useMemo(() => {
-    const list = activeTab === "ALL" ? allPosts : allPosts.filter((p) => p.status === activeTab);
-    return [...list].sort((a, b) => {
-      if (sortBy === "updated") {
-        const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();
-        const timeB = new Date(b.updatedAt || b.createdAt || 0).getTime();
-        return timeB - timeA;
+  useEffect(() => {
+    let active = true;
+    void clientApi.getAdminPosts({ status: activeTab, page, pageSize: 20, sort: sortBy === "latest" ? "published" : "updated" }).then((res) => {
+      if (!active) return;
+      if (res.error || !res.data || !res.meta) {
+        setResult({ key, posts: [], totalPages: 1, error: res.error || "无法加载文章分页" });
+        return;
       }
-      const timeA = new Date(a.publishedAt || a.createdAt || 0).getTime();
-      const timeB = new Date(b.publishedAt || b.createdAt || 0).getTime();
-      return timeB - timeA;
+      const pages = Math.max(1, res.meta.totalPages);
+      if (page > pages) { setPage(pages); return; }
+      setResult({ key, posts: res.data, totalPages: pages, error: null });
     });
-  }, [allPosts, activeTab, sortBy]);
+    return () => { active = false; };
+  }, [activeTab, page, sortBy, key]);
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([
+      clientApi.getAdminPosts({ status: "ALL", pageSize: 1 }),
+      clientApi.getAdminPosts({ status: "DRAFT", pageSize: 1 }),
+      clientApi.getAdminPosts({ status: "PUBLISHED", pageSize: 1 }),
+      clientApi.getAdminPosts({ status: "ARCHIVED", pageSize: 1 }),
+    ]).then(([all, drafts, published, archived]) => {
+      if (!active) return;
+      setCounts((previous) => ({
+        total: !all.error && all.meta ? all.meta.total : previous.total,
+        drafts: !drafts.error && drafts.meta ? drafts.meta.total : previous.drafts,
+        published: !published.error && published.meta ? published.meta.total : previous.published,
+        archived: !archived.error && archived.meta ? archived.meta.total : previous.archived,
+      }));
+      setCountsError([all, drafts, published, archived].some((res) => !!res.error || !res.meta));
+    });
+    return () => { active = false; };
+  }, [revision]);
 
   const handleDelete = async () => {
-    if (!deleteTarget) return;
+    if (!deleteTarget || deletingRef.current) return;
     const target = deleteTarget;
-    const res = await clientApi.deletePost(target.id);
-    if (res.error) {
-      setFeedback({ type: "error", msg: `删除失败：${res.error}` });
+    const generation = lifecycle.current;
+    deletingRef.current = true;
+    setDeleting(true);
+    try {
+      const res = await clientApi.deletePost(target.id, target.version);
+      if (generation !== lifecycle.current) return;
       setDeleteTarget(null);
-      return;
+      if (res.error) {
+        setFeedback({ type: "error", msg: `删除未成功确认：${res.error}。请刷新列表核对后再操作。` });
+      } else {
+        if (allPosts.length === 1 && page > 1) setPage((value) => value - 1);
+        setFeedback({ type: "success", msg: `已删除草稿「${target.title}」` });
+      }
+      // Refresh even when the outcome is unknown; reads are safe, writes are not retried.
+      setRevision((value) => value + 1);
+    } finally {
+      if (generation === lifecycle.current) { deletingRef.current = false; setDeleting(false); }
     }
-    setDeleteTarget(null);
-    setAllPosts((prev) => prev.filter((p) => p.id !== target.id));
-    setFeedback({ type: "success", msg: `已删除草稿「${target.title}」` });
   };
 
   return (
-    <div className="min-h-screen flex flex-col relative bg-[#FDFBF7]">
+    <div className="min-h-screen flex flex-col relative">
       <Header admin activePath="/admin/posts" />
 
       <main className="page-container flex-1 py-8 sm:py-12 space-y-12 animate-tab-fade">
@@ -124,52 +157,52 @@ export function AdminPostsView() {
           </div>
 
           {/* Filter Tabs & Sort Dropdown */}
-          <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
+          <fieldset disabled={deleting} aria-label="文章筛选与排序" className="flex flex-wrap items-center justify-between gap-4 pt-2">
             {/* Status Filter Tabs */}
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setActiveTab("ALL")}
+                onClick={() => { setActiveTab("ALL"); setPage(1); }}
                 className={`px-4 py-1.5 text-xs sm:text-sm font-bold rounded-full transition-colors cursor-pointer ${
                   activeTab === "ALL"
                     ? "bg-[#E65A00] text-white shadow-xs"
                     : "text-[#6B655C] hover:text-[#1A1A1A] hover:bg-[#F2ECE1]/60"
                 }`}
               >
-                全部 ({counts.total})
+                全部 ({counts.total ?? "—"})
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab("DRAFT")}
+                onClick={() => { setActiveTab("DRAFT"); setPage(1); }}
                 className={`px-4 py-1.5 text-xs sm:text-sm font-bold rounded-full transition-colors cursor-pointer ${
                   activeTab === "DRAFT"
                     ? "bg-[#E65A00] text-white shadow-xs"
                     : "text-[#6B655C] hover:text-[#1A1A1A] hover:bg-[#F2ECE1]/60"
                 }`}
               >
-                草稿 ({counts.drafts})
+                草稿 ({counts.drafts ?? "—"})
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab("PUBLISHED")}
+                onClick={() => { setActiveTab("PUBLISHED"); setPage(1); }}
                 className={`px-4 py-1.5 text-xs sm:text-sm font-bold rounded-full transition-colors cursor-pointer ${
                   activeTab === "PUBLISHED"
                     ? "bg-[#E65A00] text-white shadow-xs"
                     : "text-[#6B655C] hover:text-[#1A1A1A] hover:bg-[#F2ECE1]/60"
                 }`}
               >
-                已发布 ({counts.published})
+                已发布 ({counts.published ?? "—"})
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab("ARCHIVED")}
+                onClick={() => { setActiveTab("ARCHIVED"); setPage(1); }}
                 className={`px-4 py-1.5 text-xs sm:text-sm font-bold rounded-full transition-colors cursor-pointer ${
                   activeTab === "ARCHIVED"
                     ? "bg-[#E65A00] text-white shadow-xs"
                     : "text-[#6B655C] hover:text-[#1A1A1A] hover:bg-[#F2ECE1]/60"
                 }`}
               >
-                已归档 ({counts.archived})
+                已归档 ({counts.archived ?? "—"})
               </button>
             </div>
 
@@ -177,7 +210,7 @@ export function AdminPostsView() {
             <div>
               <select
                 value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as "latest" | "updated")}
+                onChange={(e) => { setSortBy(e.target.value as "latest" | "updated"); setPage(1); }}
                 aria-label="文章排序方式"
                 className="px-3.5 py-1.5 text-xs font-semibold rounded-full bg-white border border-[#D5C7B2] text-[#3A332C] focus:outline-none cursor-pointer"
               >
@@ -185,7 +218,8 @@ export function AdminPostsView() {
                 <option value="updated">最后更新</option>
               </select>
             </div>
-          </div>
+          </fieldset>
+          {countsError && <p role="alert" className="text-xs text-[#E65A00]">统计刷新失败，显示上次有效数据或未知值。<button type="button" disabled={deleting} onClick={() => setRevision((value) => value + 1)}>重试</button></p>}
 
           {/* Posts Table */}
           <div className="overflow-x-auto">
@@ -195,7 +229,7 @@ export function AdminPostsView() {
                   <th className="pb-3 font-semibold pl-2">标题</th>
                   <th className="pb-3 font-semibold">状态</th>
                   <th className="pb-3 font-semibold">分类</th>
-                  <th className="pb-3 font-semibold">发布时间</th>
+                  <th className="pb-3 font-semibold">{sortBy === "updated" ? "更新时间" : "发布时间"}</th>
                   <th className="pb-3 font-semibold text-right pr-2">操作</th>
                 </tr>
               </thead>
@@ -206,14 +240,16 @@ export function AdminPostsView() {
                       加载中...
                     </td>
                   </tr>
-                ) : displayedPosts.length === 0 ? (
+                ) : listError ? (
+                  <tr><td colSpan={5} className="py-12 text-center text-xs text-[#E65A00]" role="alert">{listError} <button type="button" onClick={() => setRevision((value) => value + 1)}>重试</button></td></tr>
+                ) : allPosts.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="py-12 text-center text-xs text-[#8C8375]">
                       暂无对应文章
                     </td>
                   </tr>
                 ) : (
-                  displayedPosts.map((p) => (
+                  allPosts.map((p) => (
                     <tr key={p.id} className="hover:bg-[#FFFDF9] transition-colors group">
                       <td className="py-4 font-semibold text-[#1A1A1A] max-w-sm truncate pl-2 pr-4">
                         <Link href={`/admin/posts/${p.id}/edit`} className="hover:text-[#E65A00] transition-colors">
@@ -227,7 +263,11 @@ export function AdminPostsView() {
                         {p.category?.name || "未分类"}
                       </td>
                       <td className="py-4 text-[#8C8375] font-mono text-xs">
-                        {formatDateTime(p.publishedAt || p.createdAt)}
+                        {formatDateTime(
+                          sortBy === "updated"
+                            ? p.updatedAt || p.publishedAt || p.createdAt
+                            : p.publishedAt || p.createdAt,
+                        )}
                       </td>
                       <td className="py-4 text-right pr-2 space-x-2">
                         <Link
@@ -259,6 +299,7 @@ export function AdminPostsView() {
                         {p.status === "DRAFT" && (
                           <button
                             type="button"
+                            disabled={deleting}
                             onClick={() => setDeleteTarget(p)}
                             className="p-1.5 rounded-lg text-[#8C8375] hover:text-red-600 hover:bg-red-50 inline-block cursor-pointer transition-colors"
                             title="删除草稿"
@@ -276,6 +317,15 @@ export function AdminPostsView() {
               </tbody>
             </table>
           </div>
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <Button variant="outline" size="sm" disabled={page <= 1 || loading || deleting || !!listError} onClick={() => setPage((value) => value - 1)}>
+              上一页
+            </Button>
+            <span className="text-xs font-semibold text-[#6B655C]">第 {page} / {loading || listError ? "—" : totalPages} 页</span>
+            <Button size="sm" disabled={page >= totalPages || loading || deleting || !!listError} onClick={() => setPage((value) => value + 1)}>
+              下一页
+            </Button>
+          </div>
         </div>
 
         {/* Delete Confirmation Modal */}
@@ -285,8 +335,11 @@ export function AdminPostsView() {
           description={`即将删除文章「${deleteTarget?.title}」。此操作不可撤销。`}
           confirmText="确认删除"
           isDanger
+          confirmPending={deleting}
           onConfirm={handleDelete}
-          onCancel={() => setDeleteTarget(null)}
+          onCancel={() => {
+            if (!deleting) setDeleteTarget(null);
+          }}
         />
       </main>
     </div>

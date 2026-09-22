@@ -1,308 +1,293 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Header } from "../../ui/header";
 import { Button } from "../../ui/button";
 import { StatusBadge } from "../../ui/badge";
 import { Modal } from "../../ui/modal";
 import { CatEditorWrite, CatPeek, PottedPlant, TitleBrushUnderline } from "../../ui/cat-doodles";
-import { clientApi, CategoryItem, TagItem } from "@/lib/client-api";
+import { clientApi, type AdminCategoryItem, type AdminTagItem } from "@/lib/client-api";
+import { slugifyLabel } from "@/lib/slug";
 import { MarkdownContent } from "../../ui/markdown-content";
+import { draftFromPost, editorContent, emptyEditorDraft, mutationErrorMessage, mutationNeedsReview, serializeEditorSnapshot, type EditorDraft, type MutationFailure } from "./editor-state";
+import { useEditorLeaveGuard } from "./use-editor-leave-guard";
 
 export interface AdminEditorProps {
   postId?: string;
 }
 
-interface EditorSnapshotInput {
-  title: string;
-  slug: string;
-  excerpt: string;
-  contentMd: string;
-  categoryId: string;
-  tagIds: string[];
-  seoTitle: string;
-  seoDescription: string;
+export function AdminEditorView({ postId }: AdminEditorProps) {
+  // Identity changes reset every field; Activity replays for the same identity do not.
+  const id = postId && postId !== "new" ? postId : undefined;
+  return <EditorForm key={id ?? "new"} initialPostId={id} />;
 }
 
-function serializeEditorSnapshot(input: EditorSnapshotInput) {
-  return JSON.stringify({ ...input, tagIds: [...input.tagIds].sort() });
-}
-
-
-export function AdminEditorView({ postId }: { postId?: string }) {
-  const isEdit = !!postId && postId !== "new";
-  const router = useRouter();
-
-  const [title, setTitle] = useState("");
-  const [slug, setSlug] = useState("");
-  const [excerpt, setExcerpt] = useState("");
-  const [contentMd, setContentMd] = useState("");
-  const [categoryId, setCategoryId] = useState<string>("");
-  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+function EditorForm({ initialPostId }: { initialPostId?: string }) {
+  const [postId, setPostId] = useState(initialPostId);
+  const isEdit = !!postId;
+  const [draft, setDraft] = useState(emptyEditorDraft);
+  const [savedSnapshot, setSavedSnapshot] = useState(() => serializeEditorSnapshot(emptyEditorDraft()));
+  const { title, slug, excerpt, contentMd, categoryId, tagIds: selectedTagIds, seoTitle, seoDescription, coverImageUrl, seoImageUrl } = draft;
+  const setField = <K extends keyof EditorDraft>(field: K, value: EditorDraft[K]) => setDraft((current) => ({ ...current, [field]: value }));
+  const setTitle = (value: string) => setField("title", value);
+  const setSlug = (value: string) => setField("slug", value);
+  const setExcerpt = (value: string) => setField("excerpt", value);
+  const setContentMd = (value: string) => setField("contentMd", value);
+  const setCategoryId = (value: string) => setField("categoryId", value);
+  const setSeoTitle = (value: string) => setField("seoTitle", value);
+  const setSeoDescription = (value: string) => setField("seoDescription", value);
+  const setCoverImageUrl = (value: string) => setField("coverImageUrl", value);
+  const setSeoImageUrl = (value: string) => setField("seoImageUrl", value);
   const [status, setStatus] = useState<"DRAFT" | "PUBLISHED" | "ARCHIVED">("DRAFT");
   const [isPublishedBefore, setIsPublishedBefore] = useState(false);
-  const [seoTitle, setSeoTitle] = useState("");
-  const [seoDescription, setSeoDescription] = useState("");
   const [showSeo, setShowSeo] = useState(false);
-
   const [editorTab, setEditorTab] = useState<"edit" | "preview">("edit");
-  const [categories, setCategories] = useState<CategoryItem[]>([]);
-  const [tags, setTags] = useState<TagItem[]>([]);
+  const [categories, setCategories] = useState<AdminCategoryItem[]>([]);
+  const [tags, setTags] = useState<AdminTagItem[]>([]);
+  const [optionsError, setOptionsError] = useState("");
+  const [optionsReload, setOptionsReload] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(isEdit);
+  const [loading, setLoading] = useState(!!initialPostId);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [version, setVersion] = useState<number | null>(null);
+  const [needsReview, setNeedsReview] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
-
-  // New Tag inline input state
   const [newTagName, setNewTagName] = useState("");
   const [showAddTag, setShowAddTag] = useState(false);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
-  const savedSnapshotRef = useRef("");
   const lineNumbersRef = useRef<HTMLDivElement>(null);
+  const initialized = useRef(!initialPostId);
+  const lifecycle = useRef(0);
+  const busy = useRef(false);
+  const currentSnapshot = serializeEditorSnapshot(draft);
+  const dirty = currentSnapshot !== savedSnapshot;
+  const historyGuardAvailable = useEditorLeaveGuard(dirty || saving || needsReview || !!newTagName);
+  const disabled = saving || loading;
 
-  const currentSnapshot = serializeEditorSnapshot({
-    title,
-    slug,
-    excerpt,
-    contentMd,
-    categoryId,
-    tagIds: selectedTagIds,
-    seoTitle,
-    seoDescription,
-  });
-
-  useEffect(() => {
-    clientApi.getAdminCategories().then((res) => {
-      if (res.data) setCategories(res.data);
-    });
-    clientApi.getAdminTags().then((res) => {
-      if (res.data) setTags(res.data);
-    });
-
-    if (isEdit) {
-      clientApi.getAdminPost(postId).then((res) => {
-        if (res.data) {
-          setTitle(res.data.title || "");
-          setSlug(res.data.slug || "");
-          setExcerpt(res.data.excerpt || "");
-          setContentMd(res.data.contentMd || "");
-          setSeoTitle(res.data.seoTitle || "");
-          setSeoDescription(res.data.seoDescription || "");
-          setStatus(res.data.status);
-          if (res.data.status === "PUBLISHED" || res.data.publishedAt) {
-            setIsPublishedBefore(true);
-          }
-          if (res.data.categoryId) setCategoryId(res.data.categoryId);
-          const loadedTagIds = res.data.postTags && res.data.postTags.length > 0
-            ? res.data.postTags.map((postTag) => postTag.tag.id)
-            : res.data.tags?.map((tag) => tag.id) ?? [];
-          setSelectedTagIds(loadedTagIds);
-          savedSnapshotRef.current = serializeEditorSnapshot({
-            title: res.data.title || "",
-            slug: res.data.slug || "",
-            excerpt: res.data.excerpt || "",
-            contentMd: res.data.contentMd || "",
-            categoryId: res.data.categoryId || "",
-            tagIds: loadedTagIds,
-            seoTitle: res.data.seoTitle || "",
-            seoDescription: res.data.seoDescription || "",
-          });
-        }
-        setLoading(false);
-      });
-    } else {
-      savedSnapshotRef.current = serializeEditorSnapshot({
-        title: "",
-        slug: "",
-        excerpt: "",
-        contentMd: "",
-        categoryId: "",
-        tagIds: [],
-        seoTitle: "",
-        seoDescription: "",
-      });
-    }
-  }, [isEdit, postId]);
-
-  useEffect(() => {
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (currentSnapshot === savedSnapshotRef.current) return;
-      event.preventDefault();
-      event.returnValue = "";
+  useLayoutEffect(() => {
+    lifecycle.current += 1;
+    return () => {
+      lifecycle.current += 1;
+      if (busy.current) {
+        busy.current = false;
+        setSaving(false);
+        setNeedsReview(true);
+        setFeedback({ type: "error", msg: "操作期间离开了页面，结果尚未确认。输入已保留，请先核对服务器内容，不要重复提交。" });
+      }
+      if (initialized.current) setLoading(false);
+      setShowArchiveConfirm(false);
     };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [currentSnapshot]);
+  }, []);
 
-  const handleSaveDraft = async () => {
+  useEffect(() => {
+    let active = true;
+    void Promise.all([clientApi.getAdminCategories(), clientApi.getAdminTags()]).then(([categoryRes, tagRes]) => {
+      if (!active) return;
+      if (categoryRes.data) setCategories(categoryRes.data);
+      if (tagRes.data) setTags(tagRes.data);
+      setOptionsError([categoryRes.error, tagRes.error].filter(Boolean).join("；"));
+    });
+    return () => { active = false; };
+  }, [optionsReload]);
+
+  const applyLoadedPost = (post: NonNullable<Awaited<ReturnType<typeof clientApi.getAdminPost>>["data"]>) => {
+    const loaded = draftFromPost(post);
+    setDraft(loaded);
+    setSavedSnapshot(serializeEditorSnapshot(loaded));
+    setVersion(post.version);
+    setStatus(post.status);
+    setIsPublishedBefore(post.status === "PUBLISHED" || !!post.publishedAt);
+    setLoadFailed(false);
+    setNeedsReview(false);
+    initialized.current = true;
+  };
+
+  useEffect(() => {
+    if (initialized.current || !initialPostId) return;
+    let active = true;
+    void clientApi.getAdminPost(initialPostId).then((res) => {
+      if (!active) return;
+      if (res.data && typeof res.data.version === "number") {
+        applyLoadedPost(res.data);
+      } else {
+        setLoadFailed(true);
+        setFeedback({ type: "error", msg: res.error || "文章不存在或版本无法加载" });
+      }
+      setLoading(false);
+    });
+    return () => { active = false; };
+  }, [initialPostId]);
+
+  const handleReload = async () => {
+    if (!postId || busy.current || loading) return;
+    if ((dirty || needsReview || newTagName) && !window.confirm("重新加载将丢弃当前未保存的输入，并载入服务器最新内容。确定继续吗？")) return;
+    const generation = lifecycle.current;
+    setLoading(true);
+    const res = await clientApi.getAdminPost(postId);
+    if (generation !== lifecycle.current) return;
+    if (res.data && typeof res.data.version === "number") {
+      applyLoadedPost(res.data);
+      setNewTagName("");
+      setFeedback({ type: "success", msg: "已载入服务器最新内容" });
+    } else {
+      // Failed reloads keep both the draft and its original version baseline.
+      setFeedback({ type: "error", msg: res.error || "无法加载文章版本，当前输入已保留" });
+    }
+    setLoading(false);
+  };
+
+  const showMutationError = (res: MutationFailure) => {
+    setNeedsReview(mutationNeedsReview(res));
+    setFeedback({ type: "error", msg: mutationErrorMessage(res) });
+  };
+
+  const saveContent = async (publish = false) => {
+    if (busy.current || disabled || needsReview) return;
     if (!title.trim() || !excerpt.trim() || !contentMd.trim()) {
       setFeedback({ type: "error", msg: "请填写标题、摘要和正文" });
       return;
     }
-
+    if (postId && version === null) return;
+    const generation = lifecycle.current;
+    const submittedSnapshot = currentSnapshot;
+    const payload = editorContent(draft, isPublishedBefore);
+    busy.current = true;
     setSaving(true);
     setFeedback(null);
-
     try {
-      if (isEdit) {
-        const res = await clientApi.updatePost(postId, {
-          content: {
-            title: title.trim(),
-            excerpt: excerpt.trim(),
-            contentMd: contentMd.trim(),
-            slug: slug.trim() || undefined,
-            categoryId: categoryId || null,
-            tagIds: selectedTagIds,
-            seoTitle: seoTitle.trim() || null,
-            seoDescription: seoDescription.trim() || null,
-          },
-        });
-        if (res.error) setFeedback({ type: "error", msg: res.error });
-        else {
-          savedSnapshotRef.current = currentSnapshot;
-          setFeedback({ type: "success", msg: status === "DRAFT" ? "草稿已保存！" : "文章更新已保存！" });
+      let id = postId;
+      let nextVersion = version;
+      if (!id) {
+        const created = await clientApi.createPost(payload);
+        if (generation !== lifecycle.current) return;
+        if (created.error || !created.data?.id || typeof created.data.version !== "number") {
+          showMutationError(created);
+          return;
         }
-      } else {
-        const res = await clientApi.createPost({
-          title: title.trim(),
-          excerpt: excerpt.trim(),
-          contentMd: contentMd.trim(),
-          slug: slug.trim() || undefined,
-          categoryId: categoryId || null,
-          tagIds: selectedTagIds,
-          seoTitle: seoTitle.trim() || null,
-          seoDescription: seoDescription.trim() || null,
-        });
-        if (res.error) setFeedback({ type: "error", msg: res.error });
-        else {
-          setFeedback({ type: "success", msg: "草稿创建成功！" });
-          if (res.data?.id) {
-            savedSnapshotRef.current = currentSnapshot;
-            router.replace(`/admin/posts/${res.data.id}/edit`);
-          }
+        id = created.data.id;
+        nextVersion = created.data.version;
+        // Keep the new identity immediately, even if the following publish fails.
+        setPostId(id);
+        setVersion(nextVersion);
+        setStatus(created.data.status);
+        initialized.current = true;
+        setSavedSnapshot(submittedSnapshot);
+        if (!publish) {
+          setFeedback({ type: "success", msg: "草稿创建成功！后续保存将更新同一篇文章。" });
+          return;
         }
       }
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handlePublish = async () => {
-    if (!title.trim() || !excerpt.trim() || !contentMd.trim()) {
-      setFeedback({ type: "error", msg: "请先完整填写标题、摘要与正文" });
-      return;
-    }
-
-    setSaving(true);
-    setFeedback(null);
-
-    try {
-      if (isEdit) {
-        const res = await clientApi.updatePost(postId, {
-          content: {
-            title: title.trim(),
-            excerpt: excerpt.trim(),
-            contentMd: contentMd.trim(),
-            slug: slug.trim() || undefined,
-            categoryId: categoryId || null,
-            tagIds: selectedTagIds,
-            seoTitle: seoTitle.trim() || null,
-            seoDescription: seoDescription.trim() || null,
-          },
-          action: "publish",
-        });
-        if (res.error) setFeedback({ type: "error", msg: res.error });
-        else {
-          setStatus("PUBLISHED");
-          setIsPublishedBefore(true);
-          savedSnapshotRef.current = currentSnapshot;
-          setFeedback({ type: "success", msg: "文章发布成功！" });
-        }
-      } else {
-        // Create draft first then publish
-        const createRes = await clientApi.createPost({
-          title: title.trim(),
-          excerpt: excerpt.trim(),
-          contentMd: contentMd.trim(),
-          slug: slug.trim() || undefined,
-          categoryId: categoryId || null,
-          tagIds: selectedTagIds,
-          seoTitle: seoTitle.trim() || null,
-          seoDescription: seoDescription.trim() || null,
-        });
-        if (createRes.error) {
-          setFeedback({ type: "error", msg: createRes.error });
-        } else if (createRes.data?.id) {
-          const pubRes = await clientApi.updatePost(createRes.data.id, {
-            action: "publish",
-          });
-          if (pubRes.error) setFeedback({ type: "error", msg: pubRes.error });
-          else {
-            savedSnapshotRef.current = currentSnapshot;
-            router.replace(`/admin/posts/${createRes.data.id}/edit`);
-          }
-        }
+      const res = await clientApi.updatePost(id, {
+        content: payload, ...(publish ? { action: "publish" as const } : {}), version: nextVersion!,
+      });
+      if (generation !== lifecycle.current) return;
+      if (res.error || !res.data || typeof res.data.version !== "number") {
+        showMutationError(res);
+        return;
       }
+      setVersion(res.data.version);
+      setStatus(res.data.status);
+      setIsPublishedBefore(res.data.status === "PUBLISHED" || !!res.data.publishedAt);
+      setSavedSnapshot(submittedSnapshot);
+      setFeedback({ type: "success", msg: publish ? "文章发布成功！" : "文章已保存！" });
+    } catch {
+      if (generation === lifecycle.current) showMutationError({ error: "网络异常，无法确认保存结果" });
     } finally {
-      setSaving(false);
+      if (generation === lifecycle.current) {
+        busy.current = false;
+        setSaving(false);
+      }
     }
   };
+  const handleSaveDraft = () => saveContent();
+  const handlePublish = () => saveContent(true);
 
-  const handleArchive = async () => {
-    if (!isEdit) return;
+  const changeStatus = async (action: "archive" | "restore") => {
+    if (!postId || version === null || busy.current || disabled || needsReview) return;
+    const generation = lifecycle.current;
+    busy.current = true;
     setShowArchiveConfirm(false);
     setSaving(true);
-    const res = await clientApi.updatePost(postId, { action: "archive" });
-    setSaving(false);
-    if (res.error) setFeedback({ type: "error", msg: res.error });
-    else {
-      setStatus("ARCHIVED");
-      savedSnapshotRef.current = currentSnapshot;
-      setFeedback({ type: "success", msg: "文章已归档" });
+    try {
+      const res = await clientApi.updatePost(postId, { action, version });
+      if (generation !== lifecycle.current) return;
+      if (res.error || !res.data || typeof res.data.version !== "number") showMutationError(res);
+      else {
+        setStatus(res.data.status);
+        setVersion(res.data.version);
+        // Status-only operations must never mark local content as saved.
+        setFeedback({ type: "success", msg: action === "archive" ? "文章已归档，未保存的输入仍保留" : "文章已恢复为草稿" });
+      }
+    } catch {
+      if (generation === lifecycle.current) showMutationError({ error: "网络异常，无法确认操作结果" });
+    } finally {
+      if (generation === lifecycle.current) { busy.current = false; setSaving(false); }
     }
   };
+  const handleArchive = () => changeStatus("archive");
+  const handleRestore = () => changeStatus("restore");
 
   const toggleTag = (tagId: string) => {
-    if (selectedTagIds.includes(tagId)) {
-      setSelectedTagIds(selectedTagIds.filter((id) => id !== tagId));
-    } else {
-      setSelectedTagIds([...selectedTagIds, tagId]);
-    }
+    setDraft((current) => ({ ...current, tagIds: current.tagIds.includes(tagId) ? current.tagIds.filter((id) => id !== tagId) : [...current.tagIds, tagId] }));
   };
 
   const handleCreateNewTag = async () => {
-    if (!newTagName.trim()) return;
-    const slug = newTagName.trim().toLowerCase().replace(/\s+/g, "-");
-    const res = await clientApi.createTag({ name: newTagName.trim(), slug });
-    if (res.error) {
-      setFeedback({ type: "error", msg: `创建标签失败：${res.error}` });
-      return;
-    }
-    if (res.data) {
-      setTags([...tags, res.data]);
-      setSelectedTagIds([...selectedTagIds, res.data.id]);
-      setNewTagName("");
-      setShowAddTag(false);
+    if (!newTagName.trim() || busy.current || disabled || needsReview) return;
+    const generation = lifecycle.current;
+    busy.current = true;
+    setSaving(true);
+    try {
+      const res = await clientApi.createTag({ name: newTagName.trim(), slug: slugifyLabel(newTagName.trim(), "tag") });
+      if (generation !== lifecycle.current) return;
+      if (res.error || !res.data) showMutationError(res);
+      else {
+        const tag = res.data;
+        setTags((current) => [...current, tag]);
+        setDraft((current) => ({ ...current, tagIds: [...current.tagIds, tag.id] }));
+        setNewTagName("");
+        setShowAddTag(false);
+      }
+    } catch {
+      if (generation === lifecycle.current) showMutationError({ error: "无法确认标签创建结果" });
+    } finally {
+      if (generation === lifecycle.current) { busy.current = false; setSaving(false); }
     }
   };
 
   // Split lines for line numbers
   const lines = contentMd.split("\n");
 
-  if (loading) {
+  if (loading && version === null) {
     return (
-      <div className="min-h-screen flex flex-col bg-[#FDFBF7]">
+      <div className="min-h-screen flex flex-col">
         <Header admin activePath="/admin/posts" />
         <main className="flex-1 grid place-items-center text-sm text-[#8C8375]">正在加载文章…</main>
       </div>
     );
   }
 
+  if (loadFailed) {
+    return (
+      <div className="min-h-screen flex flex-col">
+        <Header admin activePath="/admin/posts" />
+        <main className="page-container flex-1 py-16 space-y-6">
+          <div className="p-4 rounded-2xl bg-[#FFF5EE] text-[#E65A00] border border-[#FFCCAA] text-sm font-semibold">
+            {feedback?.msg || "文章不存在或无法加载"}
+          </div>
+          <Button onClick={handleReload} disabled={loading} variant="outline" size="md">重新加载</Button>
+          <Button href="/admin/posts" variant="outline" size="md">
+            ← 返回文章列表
+          </Button>
+        </main>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen flex flex-col relative bg-[#FDFBF7]">
+    <div className="min-h-screen flex flex-col relative">
       <Header admin activePath="/admin/posts" />
 
-      <main className="page-container flex-1 py-8 sm:py-12 space-y-8">
+      <main className="page-container flex-1 py-8 sm:py-12 pb-28 space-y-8">
         {/* Page Title & Status Badge */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-1.5">
@@ -337,17 +322,28 @@ export function AdminEditorView({ postId }: { postId?: string }) {
           </div>
         )}
 
-        {/* 2-Column Editor Layout: Form & Code (Left 8) + Sidebar Settings (Right 4) */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        <div className="flex flex-wrap items-center gap-3 text-xs text-[#6B655C]" role="status">
+          <span>{loading ? "正在重新加载…" : saving ? "正在保存…" : dirty ? "有未保存的修改" : "无未保存的修改"}</span>
+          {postId && <Button variant="outline" size="sm" disabled={disabled} onClick={handleReload}>重新加载服务器内容</Button>}
+          {postId && !initialPostId && <Button href={`/admin/posts/${postId}/edit`} variant="outline" size="sm">打开已保存的文章</Button>}
+          {needsReview && !postId && <Button href="/admin/posts" target="_blank" rel="noreferrer" variant="outline" size="sm">在新标签页核对文章列表</Button>}
+          {needsReview && <span>请先复制需要保留的文字，再核对服务器内容；不会自动重试。</span>}
+        </div>
+        {!historyGuardAvailable && <p role="alert" className="text-xs text-[#E65A00]">此浏览器不支持安全的后退/前进保护。离开前请保存或复制正文，建议使用最新版浏览器。</p>}
+        {optionsError && <p role="alert" className="text-xs text-[#E65A00]">分类或标签加载失败：{optionsError} <button type="button" disabled={disabled} onClick={() => setOptionsReload((value) => value + 1)}>重试</button></p>}
+
+        {/* Disable every editable control during a write or explicit reload. */}
+        <fieldset disabled={disabled} aria-label="文章内容与设置" className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start min-w-0">
           {/* Left Column: Title, Excerpt, Markdown Editor */}
           <div className="lg:col-span-8 space-y-6">
             {/* Title Input */}
             <div className="space-y-2">
-              <label className="block text-sm font-bold text-[#1A1A1A]">
+              <label htmlFor="editor-title" className="block text-sm font-bold text-[#1A1A1A]">
                 标题
               </label>
               <input
                 type="text"
+                id="editor-title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="如何写出优雅的代码"
@@ -357,10 +353,11 @@ export function AdminEditorView({ postId }: { postId?: string }) {
 
             {/* Excerpt Textarea */}
             <div className="space-y-2">
-              <label className="block text-sm font-bold text-[#1A1A1A]">
+              <label htmlFor="editor-excerpt" className="block text-sm font-bold text-[#1A1A1A]">
                 摘要
               </label>
               <textarea
+                id="editor-excerpt"
                 value={excerpt}
                 onChange={(e) => setExcerpt(e.target.value)}
                 rows={3}
@@ -372,7 +369,7 @@ export function AdminEditorView({ postId }: { postId?: string }) {
             {/* Content (Markdown) Header & Tabs */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <label className="block text-sm font-bold text-[#1A1A1A]">
+                <label htmlFor="editor-content" className="block text-sm font-bold text-[#1A1A1A]">
                   正文 (Markdown)
                 </label>
                 <div className="inline-flex rounded-full bg-[#FAF6F0] border border-[#D5C7B2] p-0.5">
@@ -423,6 +420,7 @@ export function AdminEditorView({ postId }: { postId?: string }) {
 
                   {/* Editor Textarea */}
                   <textarea
+                    id="editor-content"
                     value={contentMd}
                     onChange={(e) => setContentMd(e.target.value)}
                     onScroll={(e) => {
@@ -453,10 +451,11 @@ export function AdminEditorView({ postId }: { postId?: string }) {
             <div className="paper-card p-6 space-y-6">
               {/* Slug */}
               <div className="space-y-1.5">
-                <label className="block text-sm font-bold text-[#1A1A1A]">
+                <label htmlFor="editor-slug" className="block text-sm font-bold text-[#1A1A1A]">
                   Slug
                 </label>
                 <input
+                  id="editor-slug"
                   type="text"
                   value={slug}
                   disabled={isPublishedBefore}
@@ -471,10 +470,11 @@ export function AdminEditorView({ postId }: { postId?: string }) {
 
               {/* Category Select */}
               <div className="space-y-1.5">
-                <label className="block text-sm font-bold text-[#1A1A1A]">
+                <label htmlFor="editor-category" className="block text-sm font-bold text-[#1A1A1A]">
                   分类
                 </label>
                 <select
+                  id="editor-category"
                   value={categoryId}
                   onChange={(e) => setCategoryId(e.target.value)}
                   className="w-full px-4 py-2.5 text-xs sm:text-sm rounded-full bg-white border border-[#D5C7B2] text-[#1A1A1A] focus:border-[#E65A00] focus:outline-none cursor-pointer"
@@ -490,9 +490,9 @@ export function AdminEditorView({ postId }: { postId?: string }) {
 
               {/* Tags Multi-select Chips */}
               <div className="space-y-2">
-                <label className="block text-sm font-bold text-[#1A1A1A]">
+                <p className="block text-sm font-bold text-[#1A1A1A]">
                   标签
-                </label>
+                </p>
                 <div className="flex flex-wrap gap-2 pt-1">
                   {tags.map((t) => {
                     const isSelected = selectedTagIds.includes(t.id);
@@ -500,6 +500,7 @@ export function AdminEditorView({ postId }: { postId?: string }) {
                       <button
                         key={t.id}
                         type="button"
+                        aria-pressed={isSelected}
                         onClick={() => toggleTag(t.id)}
                         className={`px-3 py-1 text-xs font-semibold rounded-full border transition-colors cursor-pointer ${
                           isSelected
@@ -525,6 +526,7 @@ export function AdminEditorView({ postId }: { postId?: string }) {
                   <div className="flex items-center gap-2 pt-2 animate-fade-in">
                     <input
                       type="text"
+                      aria-label="新标签名"
                       value={newTagName}
                       onChange={(e) => setNewTagName(e.target.value)}
                       placeholder="新标签名..."
@@ -554,10 +556,11 @@ export function AdminEditorView({ postId }: { postId?: string }) {
                 {showSeo && (
                   <div className="space-y-4 pt-3 animate-fade-in">
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-bold text-[#1A1A1A]">SEO 标题</label>
+                      <label htmlFor="editor-seo-title" className="block text-xs font-bold text-[#1A1A1A]">SEO 标题</label>
                       <input
                         type="text"
                         maxLength={60}
+                        id="editor-seo-title"
                         value={seoTitle}
                         onChange={(event) => setSeoTitle(event.target.value)}
                         placeholder="留空则使用文章标题"
@@ -566,10 +569,11 @@ export function AdminEditorView({ postId }: { postId?: string }) {
                       <p className="text-[11px] text-[#8C8375] text-right">{seoTitle.length}/60</p>
                     </div>
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-bold text-[#1A1A1A]">SEO 描述</label>
+                      <label htmlFor="editor-seo-description" className="block text-xs font-bold text-[#1A1A1A]">SEO 描述</label>
                       <textarea
                         rows={3}
                         maxLength={160}
+                        id="editor-seo-description"
                         value={seoDescription}
                         onChange={(event) => setSeoDescription(event.target.value)}
                         placeholder="留空则使用文章摘要"
@@ -577,75 +581,85 @@ export function AdminEditorView({ postId }: { postId?: string }) {
                       />
                       <p className="text-[11px] text-[#8C8375] text-right">{seoDescription.length}/160</p>
                     </div>
+                    <div className="space-y-1.5">
+                      <label htmlFor="editor-cover-url" className="block text-xs font-bold text-[#1A1A1A]">封面图片 URL</label>
+                      <input
+                        type="url"
+                        id="editor-cover-url"
+                        value={coverImageUrl}
+                        onChange={(event) => setCoverImageUrl(event.target.value)}
+                        placeholder="站内路径或白名单 HTTPS 地址"
+                        className="w-full px-4 py-2.5 text-xs rounded-2xl bg-white border border-[#D5C7B2] focus:border-[#E65A00] focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label htmlFor="editor-share-url" className="block text-xs font-bold text-[#1A1A1A]">分享图片 URL</label>
+                      <input
+                        type="url"
+                        id="editor-share-url"
+                        value={seoImageUrl}
+                        onChange={(event) => setSeoImageUrl(event.target.value)}
+                        placeholder="留空则使用封面图"
+                        className="w-full px-4 py-2.5 text-xs rounded-2xl bg-white border border-[#D5C7B2] focus:border-[#E65A00] focus:outline-none"
+                      />
+                    </div>
                   </div>
-                )}
-              </div>
-
-              {/* Action Buttons Section */}
-              <div className="space-y-3 pt-4 border-t border-[#F0E6D8]">
-                {/* Save Draft */}
-                <Button
-                  onClick={handleSaveDraft}
-                  disabled={saving}
-                  size="lg"
-                  className="w-full"
-                >
-                  {status === "DRAFT" ? "保存草稿" : "保存更新"}
-                </Button>
-
-                {/* Preview */}
-                {isEdit && postId ? (
-                  <Button
-                    href={`/admin/posts/${postId}/preview`}
-                    variant="outline"
-                    size="lg"
-                    className="w-full"
-                  >
-                    预览
-                  </Button>
-                ) : (
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    disabled
-                    className="w-full"
-                    title="先保存草稿后才能预览"
-                  >
-                    预览
-                  </Button>
-                )}
-
-                {/* Publish */}
-                <Button
-                  onClick={handlePublish}
-                  disabled={saving}
-                  size="lg"
-                  className="w-full bg-[#E65A00]"
-                >
-                  发布
-                </Button>
-
-                {/* Archive (if published or edit) */}
-                {isEdit && status !== "ARCHIVED" && (
-                  <button
-                    type="button"
-                    onClick={() => setShowArchiveConfirm(true)}
-                    disabled={saving}
-                    className="w-full py-2 text-xs font-semibold text-[#8C8375] hover:text-[#1A1A1A] transition-colors cursor-pointer"
-                  >
-                    归档
-                  </button>
                 )}
               </div>
             </div>
           </div>
-        </div>
+        </fieldset>
       </main>
+
+      {/* Fixed bottom action bar, matching redesign-admin-editor-desktop.png */}
+      <div className="fixed bottom-0 inset-x-0 z-40 border-t border-[#F0E6D8] backdrop-blur bg-[color-mix(in_srgb,var(--color-bg)_95%,transparent)]">
+        <div className="page-container py-3 flex items-center justify-center gap-3 sm:gap-4">
+          <Button onClick={handleSaveDraft} disabled={disabled || needsReview} size="md">
+            {status === "DRAFT" ? "保存草稿" : "保存更新"}
+          </Button>
+          {isEdit && postId ? (
+            <Button
+              href={`/admin/posts/${postId}/preview`}
+              variant="outline"
+              size="md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              预览
+            </Button>
+          ) : (
+            <Button variant="outline" size="md" disabled title="先保存草稿后才能预览">
+              预览
+            </Button>
+          )}
+          {status === "DRAFT" && (
+            <Button onClick={handlePublish} disabled={disabled || needsReview} size="md">
+              发布
+            </Button>
+          )}
+          {isEdit && status === "PUBLISHED" && (
+            <button
+              type="button"
+              onClick={() => setShowArchiveConfirm(true)}
+              disabled={disabled || needsReview}
+              className="px-2 py-2 text-xs font-semibold text-[#8C8375] hover:text-[#1A1A1A] transition-colors cursor-pointer"
+            >
+              归档
+            </button>
+          )}
+          {isEdit && status === "ARCHIVED" && (
+            <Button onClick={handleRestore} disabled={disabled || needsReview} size="md">
+              恢复为草稿
+            </Button>
+          )}
+        </div>
+      </div>
       <Modal
         isOpen={showArchiveConfirm}
         title="确认归档文章？"
-        description="归档后文章将从访客端下线，但内容会保留在后台，可随时恢复。"
+        description="归档后文章将从访客端下线，但内容会保留在后台，可随时恢复。未保存的正文修改不会随归档写入。"
         confirmText="确认归档"
+        confirmPending={saving}
         onConfirm={handleArchive}
         onCancel={() => setShowArchiveConfirm(false)}
       />

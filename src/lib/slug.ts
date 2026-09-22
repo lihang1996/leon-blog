@@ -64,6 +64,34 @@ export function defaultRandom8(): string {
   return Array.from(bytes, (byte) => (byte % 36).toString(36)).join("");
 }
 
+/**
+ * Slugify a short label (tag names). Same spirit as slugifyTitle: when the
+ * name has no usable latin slug (pure CJK names — the common case for a
+ * Chinese blog), fall back to `{prefix}-{random}` instead of rejecting the
+ * input. `randomPart` is injectable for deterministic tests.
+ */
+export function slugifyLabel(
+  name: string,
+  prefix: string,
+  randomPart: () => string = defaultRandom8,
+): string {
+  const normalized = name
+    .normalize("NFKC")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  if (normalized.length > 0 && normalized.length <= MAX_TAG_SLUG_COMPAT && !CJK_CHARS.test(name)) {
+    return normalized;
+  }
+  return `${prefix}-${randomPart()}`;
+}
+
+const MAX_TAG_SLUG_COMPAT = 50;
+
 export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }

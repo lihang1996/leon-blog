@@ -4,7 +4,7 @@
  */
 
 export interface PostItem {
-  id: string;
+  id?: string;
   slug: string;
   title: string;
   excerpt: string;
@@ -13,11 +13,13 @@ export interface PostItem {
   seoTitle?: string | null;
   seoDescription?: string | null;
   seoImageUrl?: string | null;
-  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+  status?: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   publishedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
+  version?: number;
   categoryId?: string | null;
+  tagIds?: string[];
   category?: {
     id: string;
     name: string;
@@ -27,12 +29,18 @@ export interface PostItem {
   postTags?: {
     tagId?: string;
     tag: {
-      id: string;
+      id?: string;
       name: string;
       slug: string;
     };
   }[];
   tags?: TagItem[];
+}
+
+export interface AdminPostItem extends PostItem {
+  id: string;
+  version: number;
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
 }
 
 type PostPayload = Partial<PostItem> & {
@@ -46,7 +54,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export interface CategoryItem {
-  id: string;
+  id?: string;
   name: string;
   slug: string;
   description?: string | null;
@@ -57,13 +65,23 @@ export interface CategoryItem {
   updatedAt?: string;
 }
 
-export interface TagItem {
+export interface AdminCategoryItem extends CategoryItem {
   id: string;
+  version: number;
+}
+
+export interface TagItem {
+  id?: string;
   name: string;
   slug: string;
   postCount?: number;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface AdminTagItem extends TagItem {
+  id: string;
+  version: number;
 }
 
 export interface PaginationMeta {
@@ -75,12 +93,23 @@ export interface PaginationMeta {
 
 export interface ApiResponse<T> {
   data?: T;
-  meta?: PaginationMeta;
+  pagination?: PaginationMeta;
   error?: {
     code: string;
     message: string;
     details?: unknown;
+    requestId?: string;
   };
+}
+
+export interface ApiResult<T> {
+  data: T | null;
+  meta?: PaginationMeta;
+  error: string | null;
+  status: number;
+  errorCode?: string;
+  details?: unknown;
+  requestId?: string;
 }
 
 export function normalizePostItem(item: unknown): PostItem {
@@ -94,7 +123,7 @@ export function normalizePostItem(item: unknown): PostItem {
     : Array.isArray(post.postTags)
     ? post.postTags
         .map((postTag) => ("tag" in postTag ? postTag.tag : postTag))
-        .filter((tag): tag is TagItem => Boolean(tag))
+        .filter(Boolean) as TagItem[]
     : [];
 
   const postTags = tags.map((t) => ({ tag: t }));
@@ -125,58 +154,81 @@ export function getPostTags(post?: PostItem | null): TagItem[] {
   return [];
 }
 
-async function request<T>(
-  url: string,
-  options?: RequestInit
-): Promise<{ data: T | null; meta?: PaginationMeta; error: string | null }> {
+async function request<T>(url: string, options?: RequestInit): Promise<ApiResult<T>> {
+  let res: Response;
   try {
-    const res = await fetch(url, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-      },
-    });
-
-    if (res.status === 204) {
-      return { data: null, error: null };
+    const headers = new Headers(options?.headers);
+    if (options?.body != null && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
     }
-
-    const json = (await res.json()) as ApiResponse<T>;
-
-    if (!res.ok) {
-      return {
-        data: null,
-        error: json.error?.message || `请求失败 (${res.status})`,
-      };
-    }
-
-    let rawData: unknown = json.data !== undefined ? json.data : (json as unknown as T);
-    if (Array.isArray(rawData)) {
-      rawData = rawData.map((item) =>
-        isRecord(item) && ("slug" in item || "title" in item) ? normalizePostItem(item) : item
-      );
-    } else if (isRecord(rawData) && ("slug" in rawData || "title" in rawData)) {
-      rawData = normalizePostItem(rawData);
-    }
-
-    return {
-      data: rawData as T,
-      meta: json.meta,
-      error: null,
-    };
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "网络请求异常";
-    return { data: null, error: msg };
+    res = await fetch(url, { ...options, headers, cache: "no-store" });
+  } catch {
+    return { data: null, error: "网络请求失败，请检查连接后重试", status: 0, errorCode: "NETWORK_ERROR" };
   }
+
+  const requestId = res.headers.get("x-request-id") ?? undefined;
+  if (res.status === 204) return { data: null, error: null, status: res.status, requestId };
+
+  let json: ApiResponse<T>;
+  try {
+    const parsed: unknown = await res.json();
+    if (!isRecord(parsed)) throw new TypeError("Invalid response");
+    json = parsed as ApiResponse<T>;
+  } catch {
+    return {
+      data: null,
+      error: res.ok ? "服务器返回了无法识别的数据" : `请求失败 (${res.status})`,
+      status: res.status,
+      errorCode: res.ok ? "INVALID_RESPONSE" : "HTTP_ERROR",
+      requestId,
+    };
+  }
+
+  // Navigation here would discard unsaved forms before they can handle an expired session.
+  if (!res.ok) {
+    return {
+      data: null,
+      error: json.error?.message || `请求失败 (${res.status})`,
+      status: res.status,
+      errorCode: json.error?.code ?? "HTTP_ERROR",
+      details: json.error?.details,
+      requestId: json.error?.requestId ?? requestId,
+    };
+  }
+
+  let rawData: unknown = json.data;
+  if (rawData === undefined) {
+    return { data: null, error: "服务器返回了无法识别的数据", status: res.status, errorCode: "INVALID_RESPONSE", requestId };
+  }
+  if (Array.isArray(rawData)) {
+    rawData = rawData.map((item) =>
+      isRecord(item) && ("title" in item || "contentMd" in item || "status" in item)
+        ? normalizePostItem(item)
+        : item,
+    );
+  } else if (isRecord(rawData) && ("title" in rawData || "contentMd" in rawData || "status" in rawData)) {
+    rawData = normalizePostItem(rawData);
+  }
+  return { data: rawData as T, meta: json.pagination, error: null, status: res.status, requestId };
 }
 
 export const clientApi = {
   // Public APIs
-  async getPosts(params?: { page?: number; pageSize?: number }) {
+  async getPosts(params?: {
+    page?: number;
+    pageSize?: number;
+    category?: string;
+    tag?: string;
+    query?: string;
+    sort?: "latest" | "updated";
+  }) {
     const q = new URLSearchParams();
     if (params?.page) q.set("page", String(params.page));
     if (params?.pageSize) q.set("pageSize", String(params.pageSize));
+    if (params?.category) q.set("category", params.category);
+    if (params?.tag) q.set("tag", params.tag);
+    if (params?.query) q.set("q", params.query);
+    if (params?.sort) q.set("sort", params.sort);
     const qs = q.toString();
     return request<PostItem[]>(`/api/v1/posts${qs ? `?${qs}` : ""}`);
   },
@@ -217,17 +269,18 @@ export const clientApi = {
   },
 
   // Admin APIs
-  async getAdminPosts(params?: { status?: string; page?: number; pageSize?: number }) {
+  async getAdminPosts(params?: { status?: string; page?: number; pageSize?: number; sort?: "published" | "updated" }) {
     const q = new URLSearchParams();
     if (params?.status) q.set("status", params.status);
     if (params?.page) q.set("page", String(params.page));
     if (params?.pageSize) q.set("pageSize", String(params.pageSize));
+    if (params?.sort) q.set("sort", params.sort);
     const qs = q.toString();
-    return request<PostItem[]>(`/api/v1/admin/posts${qs ? `?${qs}` : ""}`);
+    return request<AdminPostItem[]>(`/api/v1/admin/posts${qs ? `?${qs}` : ""}`);
   },
 
   async getAdminPost(id: string) {
-    return request<PostItem>(`/api/v1/admin/posts/${id}`);
+    return request<AdminPostItem>(`/api/v1/admin/posts/${id}`);
   },
 
   async createPost(input: {
@@ -242,7 +295,7 @@ export const clientApi = {
     seoDescription?: string | null;
     seoImageUrl?: string | null;
   }) {
-    return request<PostItem>("/api/v1/admin/posts", {
+    return request<AdminPostItem>("/api/v1/admin/posts", {
       method: "POST",
       body: JSON.stringify(input),
     });
@@ -264,22 +317,24 @@ export const clientApi = {
         seoImageUrl?: string | null;
       };
       action?: "publish" | "archive" | "restore";
+      version: number;
     }
   ) {
-    return request<PostItem>(`/api/v1/admin/posts/${id}`, {
+    return request<AdminPostItem>(`/api/v1/admin/posts/${id}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     });
   },
 
-  async deletePost(id: string) {
+  async deletePost(id: string, version: number) {
     return request<void>(`/api/v1/admin/posts/${id}`, {
       method: "DELETE",
+      headers: { "If-Match": `"${version}"` },
     });
   },
 
   async getAdminCategories() {
-    return request<CategoryItem[]>("/api/v1/admin/categories");
+    return request<AdminCategoryItem[]>("/api/v1/admin/categories");
   },
 
   async createCategory(input: {
@@ -289,7 +344,7 @@ export const clientApi = {
     icon?: string | null;
     sortOrder: number;
   }) {
-    return request<CategoryItem>("/api/v1/admin/categories", {
+    return request<AdminCategoryItem>("/api/v1/admin/categories", {
       method: "POST",
       body: JSON.stringify(input),
     });
@@ -303,41 +358,44 @@ export const clientApi = {
       description?: string | null;
       icon?: string | null;
       sortOrder?: number;
+      version: number;
     }
   ) {
-    return request<CategoryItem>(`/api/v1/admin/categories/${id}`, {
+    return request<AdminCategoryItem>(`/api/v1/admin/categories/${id}`, {
       method: "PATCH",
       body: JSON.stringify(input),
     });
   },
 
-  async deleteCategory(id: string) {
+  async deleteCategory(id: string, version: number) {
     return request<void>(`/api/v1/admin/categories/${id}`, {
       method: "DELETE",
+      headers: { "If-Match": `"${version}"` },
     });
   },
 
   async getAdminTags() {
-    return request<TagItem[]>("/api/v1/admin/tags");
+    return request<AdminTagItem[]>("/api/v1/admin/tags");
   },
 
   async createTag(input: { name: string; slug: string }) {
-    return request<TagItem>("/api/v1/admin/tags", {
+    return request<AdminTagItem>("/api/v1/admin/tags", {
       method: "POST",
       body: JSON.stringify(input),
     });
   },
 
-  async updateTag(id: string, input: { name?: string; slug?: string }) {
-    return request<TagItem>(`/api/v1/admin/tags/${id}`, {
+  async updateTag(id: string, input: { name?: string; slug?: string; version: number }) {
+    return request<AdminTagItem>(`/api/v1/admin/tags/${id}`, {
       method: "PATCH",
       body: JSON.stringify(input),
     });
   },
 
-  async deleteTag(id: string) {
+  async deleteTag(id: string, version: number) {
     return request<void>(`/api/v1/admin/tags/${id}`, {
       method: "DELETE",
+      headers: { "If-Match": `"${version}"` },
     });
   },
 

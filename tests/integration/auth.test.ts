@@ -1,6 +1,6 @@
 import type { Session } from "next-auth";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { authenticateCredentials, MAX_FAILED_LOGINS } from "@/modules/auth";
+import { authenticateCredentials, MAX_FAILED_LOGINS, MAX_SOURCE_FAILURES } from "@/modules/auth";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { prisma } from "@/lib/db/prisma";
 import { ErrorCodes, AppError } from "@/lib/errors";
@@ -103,6 +103,35 @@ describe("authenticateCredentials", () => {
     const user = await prisma.user.findFirstOrThrow({ where: { email: TEST_ADMIN.email } });
     expect(user.failedLoginCount).toBe(0);
     expect(user.lockedUntil).toBeNull();
+  });
+
+  it("throttles one source before it can lock a known account", async () => {
+    await createAdminUser();
+    for (let i = 0; i < MAX_SOURCE_FAILURES; i++) {
+      await authenticateCredentials(TEST_ADMIN.email, "wrong-password", "198.51.100.10");
+    }
+
+    expect(await authenticateCredentials(TEST_ADMIN.email, TEST_ADMIN.password, "198.51.100.10")).toBeNull();
+    expect(await authenticateCredentials(TEST_ADMIN.email, TEST_ADMIN.password, "198.51.100.11")).not.toBeNull();
+
+    const user = await prisma.user.findFirstOrThrow({ where: { email: TEST_ADMIN.email } });
+    expect(user.lockedUntil).toBeNull();
+  });
+
+  it("does not lock the account when concurrent failures from one source race past the pre-check", async () => {
+    await createAdminUser();
+    // Five concurrent wrong passwords: source serializes to 4 account-counting
+    // failures (MAX_SOURCE_FAILURES) so the account must not reach lock.
+    await Promise.all(
+      Array.from({ length: MAX_FAILED_LOGINS }, () =>
+        authenticateCredentials(TEST_ADMIN.email, "wrong-password", "203.0.113.50"),
+      ),
+    );
+
+    const user = await prisma.user.findFirstOrThrow({ where: { email: TEST_ADMIN.email } });
+    expect(user.lockedUntil).toBeNull();
+    expect(user.failedLoginCount).toBeLessThan(MAX_FAILED_LOGINS);
+    expect(await authenticateCredentials(TEST_ADMIN.email, TEST_ADMIN.password, "203.0.113.51")).not.toBeNull();
   });
 });
 

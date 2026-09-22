@@ -15,6 +15,7 @@ export type PublicCategoryDTO = {
 
 export type AdminCategoryDTO = {
   id: string;
+  version: number;
   name: string;
   slug: string;
   description: string | null;

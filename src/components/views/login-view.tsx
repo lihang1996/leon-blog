@@ -1,29 +1,68 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
-import { signIn } from "next-auth/react";
+import { signIn, signOut } from "next-auth/react";
 import { Button } from "../ui/button";
 import { CatPeek, SparkleStar, PawIcon } from "../ui/cat-doodles";
+import { resolveAdminCallbackUrl } from "@/lib/auth/callback-url";
 
-export function LoginView() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+/** Local/test convenience: prefill bootstrap admin so you can click 登录. Never ships in production builds. */
+const DEV_LOGIN_EMAIL =
+  process.env.NODE_ENV === "development" ? "admin@example.com" : "";
+const DEV_LOGIN_PASSWORD =
+  process.env.NODE_ENV === "development" ? "QaTest-2026!" : "";
+
+export function LoginView({
+  clearInvalidSession = false,
+  callbackUrl: requestedCallback,
+}: { clearInvalidSession?: boolean; callbackUrl?: string }) {
+  const callbackUrl = resolveAdminCallbackUrl(requestedCallback);
+  const [email, setEmail] = useState(DEV_LOGIN_EMAIL);
+  const [password, setPassword] = useState(DEV_LOGIN_PASSWORD);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  // Identical SSR/client initialization, based only on the server's DB check.
+  const [sessionClearing, setSessionClearing] = useState(clearInvalidSession);
+  const [clearFailed, setClearFailed] = useState(false);
+  const cleanupStarted = useRef(false);
+
+  const clearSession = useCallback(async () => {
+    setSessionClearing(true);
+    setClearFailed(false);
+    setErrorMsg("");
+    try {
+      await signOut({ redirect: false });
+      // Auth.js does not reject every HTTP error from signOut. Confirm cookie
+      // removal with a non-cached read before claiming cleanup succeeded.
+      const response = await fetch("/api/auth/session", { cache: "no-store", credentials: "same-origin" });
+      if (!response.ok) throw new Error("Session cleanup could not be confirmed");
+      const session: unknown = await response.json();
+      if (session !== null && (typeof session !== "object" || Array.isArray(session) || Object.keys(session).length > 0)) {
+        throw new Error("Session still present or response invalid");
+      }
+      window.history.replaceState(null, "", `/admin/login?callbackUrl=${encodeURIComponent(callbackUrl)}`);
+      setSessionClearing(false);
+      setErrorMsg("登录状态已失效，请重新登录");
+    } catch {
+      // Do not unlock the form or claim cleanup succeeded after a network error.
+      setClearFailed(true);
+      setErrorMsg("清除失效会话失败，请重试");
+    }
+  }, [callbackUrl]);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const searchParams = new URLSearchParams(window.location.search);
-      const err = searchParams.get("error");
-      if (err) {
-        queueMicrotask(() => setErrorMsg("登录状态已失效或凭证有误，请重新登录"));
-      }
+    if (clearInvalidSession && !cleanupStarted.current) {
+      cleanupStarted.current = true;
+      queueMicrotask(() => { void clearSession(); });
+    } else if (!clearInvalidSession && new URLSearchParams(window.location.search).has("error")) {
+      queueMicrotask(() => setErrorMsg("登录状态已失效或凭证有误，请重新登录"));
     }
-  }, []);
+  }, [clearInvalidSession, clearSession]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (sessionClearing || loading) return;
     if (!email.trim() || !password.trim()) {
       setErrorMsg("请填写邮箱和密码");
       return;
@@ -33,23 +72,19 @@ export function LoginView() {
     setErrorMsg("");
 
     try {
-      const callbackUrl = typeof window !== "undefined"
-        ? new URLSearchParams(window.location.search).get("callbackUrl") || "/admin"
-        : "/admin";
-
       const res = await signIn("credentials", {
         email: email.trim(),
-        password: password.trim(),
+        password,
         redirect: false,
         callbackUrl,
       });
 
       if (!res || res.error) {
-        setErrorMsg("邮箱或密码错误，请重新输入");
+        setErrorMsg("登录失败，请检查凭证或稍后再试");
         setLoading(false);
       } else {
-        // Login succeeded — navigate to target
-        window.location.href = res.url || callbackUrl || "/admin";
+        // Prefer the resolved relative target over Auth.js's absolute res.url.
+        window.location.href = callbackUrl;
       }
     } catch {
       setErrorMsg("登录请求失败，请稍后重试");
@@ -58,7 +93,7 @@ export function LoginView() {
   };
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center p-4 bg-[#FDFBF7] relative overflow-hidden select-none">
+    <div className="min-h-screen w-full flex items-center justify-center p-4 relative overflow-hidden select-none">
       {/* Background Doodles */}
       <div className="absolute top-12 left-16 text-[#F9D490] hidden md:block">
         <SparkleStar className="w-6 h-6 text-[#E65A00]" />
@@ -74,6 +109,11 @@ export function LoginView() {
         <svg className="w-12 h-6 text-[#E65A00]" viewBox="0 0 40 20" fill="none">
           <path d="M4 18C12 12 24 16 36 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeDasharray="3 3" />
         </svg>
+      </div>
+
+      {/* Cat peeking from the bottom-right corner, per redesign-login-desktop.png */}
+      <div className="absolute bottom-0 right-6 hidden md:block pointer-events-none">
+        <CatPeek className="w-28 h-20" />
       </div>
 
       {/* Centered Login Card */}
@@ -100,8 +140,15 @@ export function LoginView() {
 
         {/* Error Alert */}
         {errorMsg && (
-          <div className="mb-5 p-3 rounded-2xl bg-[#FFF5EE] border border-[#FFCCAA] text-xs font-semibold text-[#E65A00] animate-fade-in">
+          <div role="alert" className="mb-5 p-3 rounded-2xl bg-[#FFF5EE] border border-[#FFCCAA] text-xs font-semibold text-[#E65A00] animate-fade-in">
             {errorMsg}
+            {clearFailed && (
+              // Revalidate on the server before retrying: another tab may have
+              // established a valid session since the first cleanup attempt.
+              <button type="button" onClick={() => window.location.reload()} className="block mx-auto mt-2 underline">
+                重试清除会话
+              </button>
+            )}
           </div>
         )}
 
@@ -148,10 +195,10 @@ export function LoginView() {
             <Button
               type="submit"
               size="lg"
-              disabled={loading}
+              disabled={loading || sessionClearing}
               className="w-full text-base font-bold shadow-md"
             >
-              {loading ? "登录中..." : "登录"}
+              {sessionClearing ? (clearFailed ? "请先重试清除会话" : "正在清除失效会话...") : loading ? "登录中..." : "登录"}
             </Button>
           </div>
         </form>

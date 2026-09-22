@@ -131,22 +131,31 @@ export function buildTagInvalidationPlan(args: {
  * (architecture §13.4). Failure is logged, never throws back to the caller —
  * the DB stays the source of truth.
  */
+/** Immediate expire profile for Route Handler mutations (read-your-writes). */
+export const IMMEDIATE_REVALIDATE = { expire: 0 } as const;
+
 export async function applyInvalidationPlan(
   plan: InvalidationPlan,
   deps: {
     revalidatePath: (path: string) => void;
-    revalidateTag: (tag: string, scope?: "max") => void;
+    /** Second arg must force immediate expiry — `"max"` would SWR-serve stale lists after publish. */
+    revalidateTag: (tag: string, profile: typeof IMMEDIATE_REVALIDATE) => void;
     onError: (message: string) => void;
   },
 ): Promise<void> {
-  try {
-    for (const path of plan.paths) {
+  for (const path of plan.paths) {
+    try {
       deps.revalidatePath(path);
+    } catch (error) {
+      deps.onError(`Cache path invalidation failed (${path}): ${error instanceof Error ? error.message : String(error)}`);
     }
-    for (const tag of plan.tags) {
-      deps.revalidateTag(tag, "max");
+  }
+  for (const tag of plan.tags) {
+    try {
+      // Route Handlers cannot call updateTag(); { expire: 0 } blocks until fresh.
+      deps.revalidateTag(tag, IMMEDIATE_REVALIDATE);
+    } catch (error) {
+      deps.onError(`Cache tag invalidation failed (${tag}): ${error instanceof Error ? error.message : String(error)}`);
     }
-  } catch (error) {
-    deps.onError(`Cache invalidation failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

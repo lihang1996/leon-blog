@@ -5,11 +5,11 @@ import Link from "next/link";
 import { Header } from "../../ui/header";
 import { StatusBadge, TagBadge } from "../../ui/badge";
 import { CatLoungingBanner } from "../../ui/cat-doodles";
-import { clientApi, getPostTags, type PostItem } from "@/lib/client-api";
+import { clientApi, getPostTags, type AdminPostItem } from "@/lib/client-api";
 import { MarkdownContent } from "../../ui/markdown-content";
 
 export function AdminPreviewView({ postId }: { postId: string }) {
-  const [post, setPost] = useState<PostItem | null>(null);
+  const [post, setPost] = useState<AdminPostItem | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -25,7 +25,7 @@ export function AdminPreviewView({ postId }: { postId: string }) {
   }, [postId]);
 
   return (
-    <div className="min-h-screen bg-[#FDFBF7]">
+    <div className="min-h-screen">
       <Header admin activePath="/admin/posts" />
       <div className="sticky top-0 z-20 border-b border-[#F0D5BF] bg-[#FFF5EE]/95 px-4 py-2 text-center text-xs font-bold text-[#E65A00] backdrop-blur">
         {post ? `${post.status === "DRAFT" ? "草稿" : post.status === "ARCHIVED" ? "已归档" : "已发布"}预览 · 仅管理员可见` : "文章预览"}

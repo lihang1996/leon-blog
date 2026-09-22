@@ -15,6 +15,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     Credentials({
       credentials: { email: {}, password: {} },
       async authorize(credentials) {
+        // Request has no authenticated peer address. Forwarded IP headers are
+        // spoofable without an approved ingress that strips/replaces them.
+        // Keep account limits + the process-wide hash cap; deployments must
+        // enforce source rate limits at their trusted ingress until approved.
         const user = await authenticateCredentials(credentials?.email, credentials?.password);
         if (!user) return null;
         return {

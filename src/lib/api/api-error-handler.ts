@@ -48,7 +48,7 @@ export function handleApiError(error: unknown, ctx: RequestContext): Response {
           requestId,
         },
       },
-      { status: error.status, headers: requestIdHeader(ctx) },
+      { status: error.status, headers: { ...requestIdHeader(ctx), "Cache-Control": "no-store" } },
     );
   }
 
@@ -64,7 +64,7 @@ export function handleApiError(error: unknown, ctx: RequestContext): Response {
           requestId,
         },
       },
-      { status: 400, headers: requestIdHeader(ctx) },
+      { status: 400, headers: { ...requestIdHeader(ctx), "Cache-Control": "no-store" } },
     );
   }
 
@@ -83,7 +83,7 @@ export function handleApiError(error: unknown, ctx: RequestContext): Response {
           requestId,
         },
       },
-      { status: 422, headers: requestIdHeader(ctx) },
+      { status: 422, headers: { ...requestIdHeader(ctx), "Cache-Control": "no-store" } },
     );
   }
 
@@ -100,6 +100,6 @@ export function handleApiError(error: unknown, ctx: RequestContext): Response {
         requestId,
       },
     },
-    { status: 500, headers: requestIdHeader(ctx) },
+    { status: 500, headers: { ...requestIdHeader(ctx), "Cache-Control": "no-store" } },
   );
 }

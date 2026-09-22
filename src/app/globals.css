@@ -93,7 +93,8 @@
 
   .site-header {
     border-bottom: 1px solid #eadfce;
-    background: rgb(253 251 247 / 92%);
+    /* Match body paper (--color-bg); keep slight translucency for sticky blur. */
+    background: color-mix(in srgb, var(--color-bg) 92%, transparent);
     backdrop-filter: blur(10px);
   }
 

@@ -13,7 +13,8 @@ const zhCNDate = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai",
 });
 
-export function formatDate(iso: string): string {
+export function formatDate(iso?: string | null): string {
+  if (!iso) return "-";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   const parts = zhCNDate.formatToParts(date);

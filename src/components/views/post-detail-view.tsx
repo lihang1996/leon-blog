@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React from "react";
 import Link from "next/link";
 import { Header } from "../ui/header";
 import { Footer } from "../ui/footer";
@@ -11,10 +11,12 @@ import {
   HangingFrame,
   PottedPlant,
   BackToTopButton,
+  PawIcon,
 } from "../ui/cat-doodles";
 import { MarkdownContent } from "../ui/markdown-content";
 import { NotFoundView } from "./not-found-view";
-import { clientApi, PostItem, getPostTags } from "@/lib/client-api";
+import { type PostItem, getPostTags } from "@/lib/client-api";
+import { formatDate } from "@/lib/format";
 
 export function PostDetailView({
   slug,
@@ -23,50 +25,15 @@ export function PostDetailView({
   slug: string;
   initialData?: {
     postDetail?: PostItem;
+    nextPost?: PostItem;
   };
 }) {
-  const [post, setPost] = useState<PostItem | null>(() => {
-    if (initialData?.postDetail && initialData.postDetail.slug === slug) {
-      return initialData.postDetail;
-    }
-    return null;
-  });
-  const [loading, setLoading] = useState(() => !(initialData?.postDetail && initialData.postDetail.slug === slug));
-  const [notFound, setNotFound] = useState(false);
-
-  useEffect(() => {
-    if (initialData?.postDetail?.slug === slug) return;
-
-    let cancelled = false;
-
-    clientApi.getPostBySlug(slug).then((res) => {
-      if (cancelled) return;
-      if (res.data) setPost(res.data);
-      else setNotFound(true);
-      setLoading(false);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [initialData, slug]);
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex flex-col bg-[#FDFBF7]">
-        <Header activePath="/posts" />
-        <main className="flex-1 grid place-items-center text-[#8C8375]">正在打开文章...</main>
-        <Footer />
-      </div>
-    );
-  }
-
-  if (notFound || !post) return <NotFoundView />;
-
-  const p = post;
+  const p = initialData?.postDetail;
+  const nextPost = initialData?.nextPost;
+  if (!p || p.slug !== slug) return <NotFoundView />;
 
   return (
-    <div className="min-h-screen flex flex-col relative bg-[#FDFBF7]">
+    <div className="min-h-screen flex flex-col relative">
       <Header activePath="/posts" />
 
       <main className="page-container flex-1 py-8 relative animate-tab-fade">
@@ -96,12 +63,26 @@ export function PostDetailView({
         <div className="max-w-4xl mx-auto space-y-8">
           {/* Header */}
           <div className="text-center space-y-4">
+            {/* Paw print above title, matching redesign-post-detail-desktop.png */}
+            <div className="flex justify-center">
+              <PawIcon className="w-9 h-9 text-[#E65A00]" />
+            </div>
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black font-serif text-[#1A1A1A] leading-tight">
               {p.title}
             </h1>
 
             {/* Meta Line */}
             <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 text-xs sm:text-sm text-[#8C8375]">
+              {/* Category: outlined orange pill per mockup */}
+              {p.category && (
+                <Link
+                  href={`/categories/${p.category.slug}`}
+                  className="inline-flex items-center px-3 py-1 rounded-full border border-[#E65A00] text-[#E65A00] text-xs font-semibold hover:bg-[#FFF5EE] transition-colors"
+                >
+                  {p.category.name}
+                </Link>
+              )}
+
               {/* Date */}
               <div className="flex items-center gap-1 font-mono">
                 <svg className="w-4 h-4 text-[#E65A00]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -110,21 +91,17 @@ export function PostDetailView({
                   <line x1="8" y1="2" x2="8" y2="6" />
                   <line x1="3" y1="10" x2="21" y2="10" />
                 </svg>
-                <span>{p.publishedAt ? p.publishedAt.slice(0, 10) : "—"}</span>
+                <span>{formatDate(p.publishedAt)}</span>
               </div>
 
-              {/* Category */}
-              {p.category && (
-                <Link
-                  href={`/categories/${p.category.slug}`}
-                  className="flex items-center gap-1 text-[#554E45] hover:text-[#E65A00] transition-colors"
-                >
-                  <svg className="w-4 h-4 text-[#8C8375]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                  </svg>
-                  <span>{p.category.name}</span>
-                </Link>
-              )}
+              {/* Reading time */}
+              <div className="flex items-center gap-1">
+                <svg className="w-4 h-4 text-[#8C8375]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+                <span>{Math.max(1, Math.round((p.contentMd?.length ?? 600) / 500))} min</span>
+              </div>
 
               {/* Tags */}
               <div className="flex items-center gap-1.5">
@@ -140,15 +117,45 @@ export function PostDetailView({
             </div>
           </div>
 
+          {p.coverImageUrl && (
+            <img
+              src={p.coverImageUrl}
+              alt={`${p.title} 封面`}
+              className="max-h-[34rem] w-full rounded-3xl border border-[#EEDFC9] object-cover shadow-sm"
+            />
+          )}
+
           {/* Stretching Cat Banner Illustration */}
           <div className="flex justify-center py-2 select-none">
             <CatLoungingBanner className="w-full max-w-2xl h-auto" />
           </div>
 
-          {/* Article Reading Sheet Card */}
-          <article className="paper-card rounded-none border-x-0 p-6 sm:p-12 text-base sm:text-lg">
+          {/* Article body sits directly on the paper, no white card */}
+          <article className="post-prose text-base sm:text-lg">
             <MarkdownContent content={p.contentMd ?? ""} />
           </article>
+
+          {/* Next Post dashed card, matching redesign-post-detail-desktop.png */}
+          {nextPost && (
+            <Link
+              href={`/posts/${nextPost.slug}`}
+              className="paper-card-dashed p-5 sm:p-6 flex items-center gap-4 group hover:border-[#E65A00] transition-colors"
+            >
+              <div className="w-11 h-11 rounded-xl bg-[#FFF5EE] border border-[#FFCCAA] flex items-center justify-center text-[#E65A00] shrink-0">
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                  <path d="m15 5 4 4" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold text-[#8C8375]">下一篇</div>
+                <div className="text-base sm:text-lg font-bold font-serif text-[#1A1A1A] group-hover:text-[#E65A00] transition-colors truncate">
+                  {nextPost.title}
+                </div>
+              </div>
+              <span className="text-[#E65A00] text-lg font-bold transition-transform group-hover:translate-x-1">→</span>
+            </Link>
+          )}
         </div>
 
         {/* Desktop Floating Decorations (Left Side) */}

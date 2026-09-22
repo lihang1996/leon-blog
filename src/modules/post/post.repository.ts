@@ -1,6 +1,6 @@
 import "server-only";
 import { Prisma, PostStatus } from "@/generated/prisma/client";
-import { isUniqueViolation, prisma } from "@/lib/db/prisma";
+import { isNotFoundViolation, isUniqueViolation, prisma } from "@/lib/db/prisma";
 import { offsetOf, type PageParams } from "@/lib/pagination";
 import { escapeLikePattern } from "@/lib/search";
 import { ErrorCodes, conflict, notFound } from "@/lib/errors";
@@ -45,6 +45,7 @@ const adminListSelect = {
   postTags: { select: { tagId: true } },
   publishedAt: true,
   updatedAt: true,
+  version: true,
 } satisfies Prisma.PostSelect;
 
 const adminDetailSelect = {
@@ -65,6 +66,7 @@ const adminDetailSelect = {
   publishedAt: true,
   createdAt: true,
   updatedAt: true,
+  version: true,
 } satisfies Prisma.PostSelect;
 
 export type PublicPostListRow = Prisma.PostGetPayload<{ select: typeof publicListSelect }>;
@@ -73,6 +75,12 @@ export type AdminPostListRow = Prisma.PostGetPayload<{ select: typeof adminListS
 export type AdminPostDetailRow = Prisma.PostGetPayload<{ select: typeof adminDetailSelect }>;
 
 type PagedResult<T> = { items: T[]; total: number };
+export type PublicPostFilters = {
+  categorySlug?: string;
+  tagSlug?: string;
+  keyword?: string;
+  sort?: "latest" | "updated";
+};
 
 /** Tag ids from a row's postTags array. */
 export function tagIdsOf(row: { postTags: { tagId: string }[] }): string[] {
@@ -82,16 +90,36 @@ export function tagIdsOf(row: { postTags: { tagId: string }[] }): string[] {
 export const postRepository = {
   // ---- Public queries (status: PUBLISHED enforced) ------------------------
 
-  async findPublishedPage({ page, pageSize }: PageParams): Promise<PagedResult<PublicPostListRow>> {
+  async findPublishedPage(
+    { page, pageSize }: PageParams,
+    filters: PublicPostFilters = {},
+  ): Promise<PagedResult<PublicPostListRow>> {
+    const keyword = filters.keyword?.trim();
+    const escaped = keyword ? escapeLikePattern(keyword) : null;
+    const where: Prisma.PostWhereInput = {
+      status: PostStatus.PUBLISHED,
+      ...(filters.categorySlug ? { category: { slug: filters.categorySlug } } : {}),
+      ...(filters.tagSlug ? { postTags: { some: { tag: { slug: filters.tagSlug } } } } : {}),
+      ...(escaped
+        ? {
+            OR: [
+              { title: { contains: escaped, mode: "insensitive" } },
+              { excerpt: { contains: escaped, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
     const [items, total] = await Promise.all([
       prisma.post.findMany({
-        where: { status: PostStatus.PUBLISHED },
+        where,
         select: publicListSelect,
-        orderBy: { publishedAt: "desc" },
+        orderBy: filters.sort === "updated"
+          ? [{ updatedAt: "desc" }, { id: "desc" }]
+          : [{ publishedAt: "desc" }, { id: "desc" }],
         skip: offsetOf(page, pageSize),
         take: pageSize,
       }),
-      prisma.post.count({ where: { status: PostStatus.PUBLISHED } }),
+      prisma.post.count({ where }),
     ]);
     return { items, total };
   },
@@ -103,12 +131,38 @@ export const postRepository = {
     });
   },
 
+  async findPublishedNeighbor(slug: string): Promise<PublicPostListRow | null> {
+    const current = await prisma.post.findFirst({
+      where: { slug, status: PostStatus.PUBLISHED },
+      select: { publishedAt: true, id: true },
+    });
+    if (!current?.publishedAt) return null;
+
+    const older = await prisma.post.findFirst({
+      where: {
+        status: PostStatus.PUBLISHED,
+        OR: [
+          { publishedAt: { lt: current.publishedAt } },
+          { publishedAt: current.publishedAt, id: { lt: current.id } },
+        ],
+      },
+      select: publicListSelect,
+      orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
+    });
+    if (older) return older;
+    return prisma.post.findFirst({
+      where: { status: PostStatus.PUBLISHED, slug: { not: slug } },
+      select: publicListSelect,
+      orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
+    });
+  },
+
   /** Home page: the `limit` most recent published posts (no Markdown body). */
   async findLatestPublished(limit: number): Promise<PublicPostListRow[]> {
     return prisma.post.findMany({
       where: { status: PostStatus.PUBLISHED },
       select: publicListSelect,
-      orderBy: { publishedAt: "desc" },
+      orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
       take: limit,
     });
   },
@@ -127,7 +181,7 @@ export const postRepository = {
       prisma.post.findMany({
         where,
         select: publicListSelect,
-        orderBy: { publishedAt: "desc" },
+        orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
         skip: offsetOf(page, pageSize),
         take: pageSize,
       }),
@@ -148,7 +202,7 @@ export const postRepository = {
       prisma.post.findMany({
         where,
         select: publicListSelect,
-        orderBy: { publishedAt: "desc" },
+        orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
         skip: offsetOf(page, pageSize),
         take: pageSize,
       }),
@@ -169,7 +223,7 @@ export const postRepository = {
       prisma.post.findMany({
         where,
         select: publicListSelect,
-        orderBy: { publishedAt: "desc" },
+        orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
         skip: offsetOf(page, pageSize),
         take: pageSize,
       }),
@@ -183,13 +237,16 @@ export const postRepository = {
   async listAdminPage(
     { page, pageSize }: PageParams,
     status: PostStatus | "ALL",
+    sort: "published" | "updated" = "updated",
   ): Promise<PagedResult<AdminPostListRow>> {
     const where: Prisma.PostWhereInput = status === "ALL" ? {} : { status };
     const [items, total] = await Promise.all([
       prisma.post.findMany({
         where,
         select: adminListSelect,
-        orderBy: { updatedAt: "desc" },
+        orderBy: sort === "published"
+          ? [{ publishedAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }, { id: "desc" }]
+          : [{ updatedAt: "desc" }, { id: "desc" }],
         skip: offsetOf(page, pageSize),
         take: pageSize,
       }),
@@ -277,6 +334,7 @@ export const postRepository = {
       tagIds?: string[];
       status?: PostStatus;
       publishedAt?: Date | null;
+      expectedVersion: number;
     },
   ): Promise<AdminPostDetailRow> {
     try {
@@ -288,7 +346,7 @@ export const postRepository = {
           }
         }
         return tx.post.update({
-          where: { id },
+          where: { id, version: data.expectedVersion },
           data: {
             ...(data.title !== undefined ? { title: data.title } : {}),
             ...(data.slug !== undefined ? { slug: data.slug } : {}),
@@ -301,6 +359,7 @@ export const postRepository = {
             ...(data.seoImageUrl !== undefined ? { seoImageUrl: data.seoImageUrl } : {}),
             ...(data.status !== undefined ? { status: data.status } : {}),
             ...(data.publishedAt !== undefined ? { publishedAt: data.publishedAt } : {}),
+            version: { increment: 1 },
             ...(data.tagIds !== undefined
               ? { postTags: { deleteMany: {}, create: data.tagIds.map((tagId) => ({ tagId })) } }
               : {}),
@@ -312,12 +371,18 @@ export const postRepository = {
       if (isUniqueViolation(error)) {
         throw conflict(ErrorCodes.POST_SLUG_EXISTS, "文章 slug 已存在");
       }
+      if (isNotFoundViolation(error)) {
+        throw conflict(ErrorCodes.POST_CONCURRENT_MODIFICATION, "文章已被其他操作修改，请刷新后重试");
+      }
       throw error;
     }
   },
 
-  async delete(id: string): Promise<void> {
-    await prisma.post.delete({ where: { id } });
+  async deleteDraftConditionally(id: string, expectedVersion: number): Promise<boolean> {
+    const result = await prisma.post.deleteMany({
+      where: { id, status: PostStatus.DRAFT, version: expectedVersion },
+    });
+    return result.count === 1;
   },
 };
 

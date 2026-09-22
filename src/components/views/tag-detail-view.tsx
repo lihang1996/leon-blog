@@ -1,98 +1,42 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useTransition } from "react";
+import type { InitialData } from "@/app/site-shell";
+import { publicQueryHref } from "@/lib/public-query";
 import Link from "next/link";
 import { Header } from "../ui/header";
 import { Footer } from "../ui/footer";
 import { TagBadge, CategoryBadge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { WavyDivider, CatPeek, CatSleep } from "../ui/cat-doodles";
-import { clientApi, PostItem, TagItem, getPostTags } from "@/lib/client-api";
-
-// Fallback tags cache so sidebar never renders empty initially
-const DEFAULT_TAGS: TagItem[] = [
-  { id: "t-perf", name: "性能", slug: "perf", postCount: 2 },
-  { id: "t-nextjs", name: "Next.js", slug: "nextjs", postCount: 1 },
-  { id: "t-pg", name: "PostgreSQL", slug: "postgresql", postCount: 1 },
-  { id: "t-prisma", name: "Prisma", slug: "prisma", postCount: 1 },
-  { id: "t-react", name: "React", slug: "react", postCount: 2 },
-  { id: "t-ts", name: "TypeScript", slug: "typescript", postCount: 1 },
-];
+import { getPostTags } from "@/lib/client-api";
+import { formatDate } from "@/lib/format";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export function TagDetailView({
-  slug: initialSlug,
+  slug: currentSlug,
   initialData,
 }: {
   slug: string;
-  initialData?: {
-    tags?: TagItem[];
-    posts?: PostItem[];
-  };
+  initialData?: InitialData;
 }) {
-  const [currentSlug, setCurrentSlug] = useState<string>(initialSlug);
-  const [tags, setTags] = useState<TagItem[]>(() =>
-    initialData?.tags && initialData.tags.length > 0 ? initialData.tags : DEFAULT_TAGS
-  );
-  const [posts, setPosts] = useState<PostItem[]>(() => {
-    if (initialData?.posts && initialData.posts.length > 0) {
-      return initialData.posts.filter((p) => p.postTags?.some((pt) => pt.tag.slug === initialSlug));
-    }
-    return [];
-  });
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [loading, setLoading] = useState(false);
-
-  // Support browser back/forward buttons
-  useEffect(() => {
-    const handlePopState = () => {
-      const match = window.location.pathname.match(/\/tags\/([^/?#]+)/);
-      if (match && match[1]) {
-        setCurrentSlug(decodeURIComponent(match[1]));
-      }
-    };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
-
-  // Fetch all tags for sidebar (keep existing tags on error)
-  useEffect(() => {
-    clientApi.getTags().then((res) => {
-      if (res.data && res.data.length > 0) {
-        setTags(res.data);
-      }
-    });
-  }, []);
-
-  // Fetch posts whenever the selected tag or page changes.
-  useEffect(() => {
-    let active = true;
-    void clientApi.getPostsByTag(currentSlug, { page, pageSize: 6 }).then((res) => {
-      if (!active) return;
-      if (res.data) {
-        setPosts(res.data);
-        if (res.meta) {
-          setTotalPages(res.meta.totalPages || 1);
-        }
-      }
-      setLoading(false);
-    });
-    return () => {
-      active = false;
-    };
-  }, [currentSlug, page]);
-
-  // In-page smooth tag switch
-  const handleSelectTag = useCallback((newSlug: string) => {
-    if (newSlug === currentSlug) return;
-    setLoading(true);
-    setCurrentSlug(newSlug);
-    setPage(1);
-    window.history.pushState(null, "", `/tags/${newSlug}`);
-  }, [currentSlug]);
-
-  const tag = tags.find((item) => item.slug === currentSlug) ?? null;
-  const tagName = tag?.name || decodeURIComponent(currentSlug);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [loading, startTransition] = useTransition();
+  const tags = initialData?.tags ?? [];
+  const posts = initialData?.posts ?? [];
+  const page = initialData?.query?.page ?? 1;
+  const totalPages = initialData?.pagination?.totalPages ?? 1;
+  const navigate = (slug: string, targetPage: number) => {
+    startTransition(() => router.push(publicQueryHref(`/tags/${encodeURIComponent(slug)}`, new URLSearchParams(searchParams.toString()), {
+      page: targetPage,
+    }), { scroll: false }));
+  };
+  const handleSelectTag = (slug: string) => {
+    if (slug !== currentSlug) navigate(slug, 1);
+  };
+  const tag = initialData?.tag;
+  const tagName = tag?.name || "标签";
   const tagCount = tag?.postCount ?? posts.length;
 
   return (
@@ -126,7 +70,7 @@ export function TagDetailView({
         {/* Content Layout: Posts List (Left) + Sidebar (Right) */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* Post items list with stable min-height & fixed-bottom pagination */}
-          <div className="lg:col-span-8 w-full min-h-[480px] flex flex-col justify-between">
+          <div className="lg:col-span-8 min-w-0 w-full min-h-[480px] flex flex-col justify-between" aria-busy={loading}>
             {posts.length > 0 ? (
               <div className={`flex-1 flex flex-col justify-between transition-opacity duration-150 ${loading ? "opacity-30" : "opacity-100"}`}>
                 <div className="space-y-6">
@@ -143,15 +87,15 @@ export function TagDetailView({
                                 <line x1="8" y1="2" x2="8" y2="6" />
                                 <line x1="3" y1="10" x2="21" y2="10" />
                               </svg>
-                              <span>{post.publishedAt ? post.publishedAt.slice(0, 10) : "2024-05-20"}</span>
+                              <span>{formatDate(post.publishedAt)}</span>
                             </div>
                             {post.category && (
-                              <CategoryBadge name={post.category.name} href={`/categories/${post.category.slug}`} />
+                              <CategoryBadge name={post.category.name} href={`/categories/${post.category.slug}`} className="max-w-full whitespace-normal [overflow-wrap:anywhere]" />
                             )}
                           </div>
 
                           {/* Middle */}
-                          <div className="flex-1 space-y-2">
+                          <div className="flex-1 min-w-0 space-y-2">
                             <Link href={`/posts/${post.slug}`} scroll={false}>
                               <h2 className="text-lg sm:text-xl font-bold font-serif text-[#1A1A1A] group-hover:text-[#E65A00] transition-colors leading-snug">
                                 {post.title}
@@ -195,23 +139,25 @@ export function TagDetailView({
                   ))}
                 </div>
 
-                {/* Fixed-bottom pagination aligned with bottom of sidebar */}
+                {/* Pagination: 上一页 + page nums + solid 下一页, per redesign-tag-detail-desktop.png */}
                 <div className="flex items-center justify-center gap-2 pt-8 mt-auto">
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={page <= 1}
-                    onClick={() => setPage(page - 1)}
+                    disabled={loading || page <= 1}
+                    onClick={() => navigate(currentSlug, page - 1)}
                   >
                     上一页
                   </Button>
                   {Array.from({ length: totalPages || 1 }, (_, i) => i + 1).map((p) => (
                     <button
                       key={p}
-                      onClick={() => setPage(p)}
-                      className={`w-8 h-8 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                      onClick={() => navigate(currentSlug, p)}
+                      disabled={loading}
+                      aria-current={p === page ? "page" : undefined}
+                      className={`w-8 h-8 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
                         p === page
-                          ? "bg-[#E65A00] text-white"
+                          ? "bg-[#FFF5EE] border border-[#E65A00] text-[#E65A00]"
                           : "border border-[#D5C7B2] bg-white text-[#3A332C] hover:border-[#E65A00]"
                       }`}
                     >
@@ -221,8 +167,8 @@ export function TagDetailView({
                   <Button
                     variant="primary"
                     size="sm"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage(page + 1)}
+                    disabled={loading || page >= totalPages}
+                    onClick={() => navigate(currentSlug, page + 1)}
                   >
                     下一页
                   </Button>
@@ -237,24 +183,24 @@ export function TagDetailView({
               <div className="w-full paper-card-dashed p-10 sm:p-14 flex flex-col items-center justify-center text-center space-y-4 min-h-[380px] my-auto">
                 <CatSleep className="w-44 h-32" />
                 <h3 className="text-lg font-bold text-[#1A1A1A]">该标签下暂无文章</h3>
-                <Link href="/posts" scroll={false} className="text-xs font-bold text-[#E65A00] hover:underline">
+                <Button href="/posts" variant="outline" size="sm" className="mt-2">
                   浏览全部文章 →
-                </Link>
+                </Button>
               </div>
             )}
           </div>
 
-          {/* Right Sidebar: Related Tags (Kept fully static without re-mounting) */}
+          {/* Right Sidebar: solid card, tags without #, per redesign-tag-detail-desktop.png */}
           <div className="lg:col-span-4 w-full">
-            <aside className="paper-card-dashed p-6 space-y-6 relative overflow-hidden bg-white/70">
-              <div className="flex items-center gap-2">
+            <aside className="paper-card p-6 space-y-6 relative overflow-hidden">
+              <div className="relative inline-block">
                 <h3 className="text-xl font-bold font-serif text-[#1A1A1A]">
                   相关标签
                 </h3>
-                <span className="text-[#E65A00] text-sm">´</span>
+                <span className="absolute -top-1 -right-4 text-[#E65A00] text-sm" aria-hidden="true">✨</span>
+                <div className="mt-1 h-1 w-14 rounded-full bg-[#E65A00]/80" />
               </div>
 
-              {/* Tags Grid with in-page smooth click */}
               <div className="grid grid-cols-2 gap-2">
                 {tags.map((t) => (
                   <TagBadge
@@ -263,6 +209,7 @@ export function TagDetailView({
                     count={t.postCount}
                     onClick={() => handleSelectTag(t.slug)}
                     active={t.slug === currentSlug}
+                    showHash={false}
                     size="sm"
                     className="justify-between w-full"
                   />

@@ -11,6 +11,7 @@ export type PublicTagDTO = {
 
 export type AdminTagDTO = {
   id: string;
+  version: number;
   name: string;
   slug: string;
   /** Total posts (any status) with this tag. */

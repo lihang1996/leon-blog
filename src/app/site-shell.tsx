@@ -19,12 +19,21 @@ import { AdminCategoriesView } from "@/components/views/admin/admin-categories-v
 import { AdminTagsView } from "@/components/views/admin/admin-tags-view";
 import { AdminPreviewView } from "@/components/views/admin/admin-preview-view";
 import type { PostItem, CategoryItem, TagItem } from "@/lib/client-api";
+import type { PaginationInfo } from "@/lib/pagination";
+import type { PublicQuery } from "@/lib/public-query";
 
 export interface InitialData {
   posts?: PostItem[];
+  totalPosts?: number;
+  pagination?: PaginationInfo;
+  query?: PublicQuery;
   categories?: CategoryItem[];
   tags?: TagItem[];
+  category?: CategoryItem;
+  tag?: TagItem;
   postDetail?: PostItem;
+  nextPost?: PostItem;
+  loginState?: { clearInvalidSession: boolean; callbackUrl: string };
 }
 
 export interface SiteShellProps {
@@ -41,7 +50,7 @@ export default function SiteShell({ route = "home", initialData }: SiteShellProp
   const renderContent = () => {
     switch (kind) {
       case "login":
-        return <LoginView />;
+        return <LoginView {...initialData?.loginState} />;
 
       case "admin": {
         if (arg1 === "posts") {
@@ -75,7 +84,7 @@ export default function SiteShell({ route = "home", initialData }: SiteShellProp
         return <TagDetailView slug={arg1 || ""} initialData={initialData} />;
 
       case "search":
-        return <SearchView />;
+        return <SearchView initialData={initialData} />;
 
       case "not-found":
       case "404":

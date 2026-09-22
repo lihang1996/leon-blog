@@ -1,7 +1,7 @@
 import "server-only";
 import { Prisma } from "@/generated/prisma/client";
-import { isUniqueViolation, prisma, uniqueViolationField } from "@/lib/db/prisma";
-import { ErrorCodes, conflict } from "@/lib/errors";
+import { isNotFoundViolation, isUniqueViolation, prisma, uniqueViolationField } from "@/lib/db/prisma";
+import { AppError, ErrorCodes, conflict } from "@/lib/errors";
 
 /** Map a P2002 on categories to a stable 409 (name vs slug) instead of a 500. */
 function mapCategoryUniqueConflict(error: unknown): never {
@@ -9,6 +9,15 @@ function mapCategoryUniqueConflict(error: unknown): never {
   const field = uniqueViolationField(error);
   if (field === "name") throw conflict(ErrorCodes.CATEGORY_NAME_EXISTS, "分类名称已存在");
   throw conflict(ErrorCodes.CATEGORY_SLUG_EXISTS, "分类 slug 已存在");
+}
+
+function mapCategoryWriteError(error: unknown): never {
+  if (error instanceof AppError) throw error;
+  if (isUniqueViolation(error)) mapCategoryUniqueConflict(error);
+  if (isNotFoundViolation(error)) {
+    throw conflict(ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION, "分类已被其他操作修改，请刷新后重试");
+  }
+  throw error;
 }
 
 /**
@@ -38,6 +47,8 @@ export const adminCategorySelect = {
   description: true,
   icon: true,
   sortOrder: true,
+  updatedAt: true,
+  version: true,
   _count: { select: { posts: true } },
 } satisfies Prisma.CategorySelect;
 
@@ -54,6 +65,7 @@ export const categoryRepository = {
     return rows.filter((row) => row._count.posts > 0);
   },
 
+  /** Public detail by slug — exists even when it currently has zero published posts. */
   async findPublicBySlug(slug: string): Promise<PublicCategoryRow | null> {
     return prisma.category.findFirst({
       where: { slug },
@@ -127,19 +139,24 @@ export const categoryRepository = {
   async update(
     id: string,
     data: { name?: string; slug?: string; description?: string | null; icon?: string | null; sortOrder?: number },
+    expectedVersion: number,
   ): Promise<AdminCategoryRow> {
     try {
       return await prisma.category.update({
-        where: { id },
-        data,
+        where: { id, version: expectedVersion },
+        data: { ...data, version: { increment: 1 } },
         select: adminCategorySelect,
       });
     } catch (error) {
-      mapCategoryUniqueConflict(error);
+      mapCategoryWriteError(error);
     }
   },
 
-  async delete(id: string): Promise<void> {
-    await prisma.category.delete({ where: { id } });
+  async delete(id: string, expectedVersion: number): Promise<void> {
+    try {
+      await prisma.category.delete({ where: { id, version: expectedVersion } });
+    } catch (error) {
+      mapCategoryWriteError(error);
+    }
   },
 };

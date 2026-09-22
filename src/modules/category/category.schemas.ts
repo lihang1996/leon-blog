@@ -31,7 +31,9 @@ export const createCategorySchema = z.object({
   sortOrder: z.number().int().min(0).max(1000),
 });
 
-export const updateCategorySchema = createCategorySchema.partial();
+export const updateCategorySchema = createCategorySchema.partial().extend({
+  version: z.number().int().nonnegative().max(2_147_483_647),
+});
 
 // `z.input` — description is optional; sortOrder is required on create (omit → 422).
 export type CreateCategoryInput = z.input<typeof createCategorySchema>;

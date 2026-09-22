@@ -1,4 +1,5 @@
 import { isAcceptableSlug, isValidSlug, slugifyTitle } from "@/lib/slug";
+import { extractMarkdownImageUrls } from "@/lib/markdown/markdown-policy";
 
 /**
  * Pure post rules (architecture §7). No Next.js, no Prisma.
@@ -113,6 +114,15 @@ export function validatePublish(input: PublishCheckInput): ValidationIssue[] {
     issues.push({ code: "CONTENT_EMPTY", message: "正文不能为空" });
   } else if (input.contentMd.length > MAX_CONTENT_LENGTH) {
     issues.push({ code: "CONTENT_TOO_LARGE", message: `正文不能超过 ${MAX_CONTENT_LENGTH} 字节` });
+  } else {
+    // Use exactly the renderer's image grammar; code/examples are not images.
+    // One scan and at most one issue, with no separate relative-URL bypass.
+    for (const imageUrl of extractMarkdownImageUrls(input.contentMd)) {
+      if (!input.isImageUrlAllowed(imageUrl)) {
+        issues.push({ code: "MARKDOWN_IMAGE_NOT_ALLOWED", message: "正文图片必须是站内地址或白名单内的 HTTPS 地址" });
+        break;
+      }
+    }
   }
 
   if (input.tagCount > MAX_TAGS_PER_POST) {

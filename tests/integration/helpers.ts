@@ -26,7 +26,7 @@ export async function resetDatabase(): Promise<void> {
     throw new Error(`Refusing to TRUNCATE business tables on non-test database "${dbName}"`);
   }
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "post_tags", "posts", "tags", "categories", "users" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "login_throttles", "post_tags", "posts", "tags", "categories", "users" RESTART IDENTITY CASCADE',
   );
 }
 
@@ -108,12 +108,14 @@ export function makeRequest(
     method?: string;
     origin?: string | null;
     contentType?: string | null;
+    ifMatch?: string | null;
     body?: unknown;
   },
 ): NextRequest {
   const headers = new Headers();
   if (init?.origin) headers.set("origin", init.origin);
   if (init?.contentType) headers.set("content-type", init.contentType);
+  if (init?.ifMatch !== undefined && init.ifMatch !== null) headers.set("if-match", init.ifMatch);
 
   let body: string | null = null;
   if (init?.body !== undefined) body = JSON.stringify(init.body);

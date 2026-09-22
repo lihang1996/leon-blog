@@ -6,7 +6,9 @@ export const createTagSchema = z.object({
   slug: z.string().trim().toLowerCase().min(1).max(MAX_TAG_SLUG_LENGTH),
 });
 
-export const updateTagSchema = createTagSchema.partial();
+export const updateTagSchema = createTagSchema.partial().extend({
+  version: z.number().int().nonnegative().max(2_147_483_647),
+});
 
 export type CreateTagInput = z.input<typeof createTagSchema>;
 export type UpdateTagInput = z.input<typeof updateTagSchema>;

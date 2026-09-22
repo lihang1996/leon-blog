@@ -102,7 +102,7 @@ describe("category/tag plans", () => {
 });
 
 describe("applyInvalidationPlan", () => {
-  it("runs revalidatePath for every path and revalidateTag(max) for every tag", async () => {
+  it("runs revalidatePath for every path and revalidateTag({ expire: 0 }) for every tag", async () => {
     const revalidatePath = vi.fn();
     const revalidateTag = vi.fn();
     const onError = vi.fn();
@@ -114,7 +114,7 @@ describe("applyInvalidationPlan", () => {
 
     expect(revalidatePath).toHaveBeenCalledTimes(2);
     expect(revalidatePath).toHaveBeenCalledWith("/");
-    expect(revalidateTag).toHaveBeenCalledWith("posts", "max");
+    expect(revalidateTag).toHaveBeenCalledWith("posts", { expire: 0 });
     expect(onError).not.toHaveBeenCalled();
   });
 
@@ -131,5 +131,22 @@ describe("applyInvalidationPlan", () => {
       },
     );
     expect(onError).toHaveBeenCalledWith(expect.stringContaining("boom"));
+  });
+
+  it("continues invalidating later paths and tags after one target fails", async () => {
+    const revalidatePath = vi.fn((path: string) => {
+      if (path === "/broken") throw new Error("path failed");
+    });
+    const revalidateTag = vi.fn();
+    const onError = vi.fn();
+
+    await applyInvalidationPlan(
+      { paths: ["/broken", "/posts"], tags: ["posts", "tags"] },
+      { revalidatePath, revalidateTag, onError },
+    );
+
+    expect(revalidatePath).toHaveBeenCalledWith("/posts");
+    expect(revalidateTag).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledTimes(1);
   });
 });

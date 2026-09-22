@@ -39,6 +39,7 @@ export type AdminPostListItemDTO = {
   tagIds: string[];
   publishedAt: string | null;
   updatedAt: string;
+  version: number;
 };
 
 export type AdminPostDTO = {
@@ -60,4 +61,6 @@ export type AdminPostDTO = {
   publishedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Optimistic-concurrency token; required on subsequent PATCH or DELETE. */
+  version: number;
 };

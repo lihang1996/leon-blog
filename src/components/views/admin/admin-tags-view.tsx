@@ -1,79 +1,139 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Header } from "../../ui/header";
 import { Button } from "../../ui/button";
 import { Modal } from "../../ui/modal";
 import { CatTagsSleep, TitleBrushUnderline } from "../../ui/cat-doodles";
-import { clientApi, TagItem } from "@/lib/client-api";
+import { clientApi, type AdminTagItem } from "@/lib/client-api";
+import { slugifyLabel } from "@/lib/slug";
+import { mutationErrorMessage, mutationNeedsReview } from "./editor-state";
 
 export function AdminTagsView() {
-  const [tags, setTags] = useState<TagItem[]>([]);
+  const [tags, setTags] = useState<AdminTagItem[]>([]);
   const [name, setName] = useState("");
-  const [editingTag, setEditingTag] = useState<TagItem | null>(null);
+  const [editingTag, setEditingTag] = useState<AdminTagItem | null>(null);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<TagItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AdminTagItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
-  const fetchTags = async () => {
-    const res = await clientApi.getAdminTags();
-      if (res.data) {
-        setTags(res.data);
+  const [revision, setRevision] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [needsReview, setNeedsReview] = useState(false);
+  const lifecycle = useRef(0);
+  const busy = useRef(false);
+
+  useLayoutEffect(() => {
+    lifecycle.current += 1;
+    return () => {
+      lifecycle.current += 1;
+      if (busy.current) {
+        setNeedsReview(true);
+        setFeedback({ type: "error", msg: "操作结果尚未确认，输入已保留。请核对列表，不要重复提交。" });
       }
-  };
+      busy.current = false;
+      setSaving(false);
+      setDeleting(false);
+      setDeleteTarget(null);
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
     void clientApi.getAdminTags().then((res) => {
-      if (active && res.data) setTags(res.data);
+      if (!active) return;
+      if (res.data) setTags(res.data);
+      setLoadError(res.error || (!res.data ? "无法加载标签" : ""));
+      setLoading(false);
     });
-    return () => {
-      active = false;
-    };
-  }, []);
+    return () => { active = false; setLoading(true); };
+  }, [revision]);
+  const fetchTags = () => { setLoading(true); setRevision((value) => value + 1); };
+
+  const handleReloadForm = async () => {
+    if (busy.current || !window.confirm("丢弃当前输入并重新载入服务器最新标签？")) return;
+    const targetId = editingTag?.id;
+    const generation = lifecycle.current;
+    busy.current = true;
+    setSaving(true);
+    try {
+      const res = await clientApi.getAdminTags();
+      if (generation !== lifecycle.current) return;
+      if (!res.data || res.error) { setFeedback({ type: "error", msg: res.error || "加载失败，输入已保留" }); return; }
+      setTags(res.data);
+      setLoadError("");
+      const latest = res.data.find((tag) => tag.id === targetId);
+      if (targetId && !latest) { setFeedback({ type: "error", msg: "该标签已不存在。输入已保留，可取消编辑。" }); return; }
+      setEditingTag(latest ?? null);
+      setName(latest?.name ?? "");
+      setFeedback(null);
+      setNeedsReview(false);
+    } finally {
+      if (generation === lifecycle.current) { busy.current = false; setSaving(false); }
+    }
+  };
 
   const handleAddTag = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (busy.current || needsReview) return;
+    if (!name.trim()) {
+      setFeedback({ type: "error", msg: "标签名称不能为空" });
+      return;
+    }
 
     const trimmed = name.trim();
-    const slug = trimmed.toLowerCase().replace(/\s+/g, "-");
+    // 中文名（无拉丁 slug 可用）自动回退 tag-随机串，与文章 slug 策略一致。
+    const slug = editingTag?.slug ?? slugifyLabel(trimmed, "tag");
+    const generation = lifecycle.current;
+    busy.current = true;
     setSaving(true);
     setFeedback(null);
-
     try {
       const res = editingTag
-        ? await clientApi.updateTag(editingTag.id, { name: trimmed, slug })
+        ? await clientApi.updateTag(editingTag.id, { name: trimmed, slug, version: editingTag.version })
         : await clientApi.createTag({ name: trimmed, slug });
-      if (res.error) {
-        setFeedback({ type: "error", msg: res.error });
+      if (generation !== lifecycle.current) return;
+      if (res.error || !res.data) {
+        setNeedsReview(mutationNeedsReview(res));
+        setFeedback({ type: "error", msg: mutationErrorMessage(res) });
       } else {
         setName("");
         setEditingTag(null);
         setFeedback({ type: "success", msg: editingTag ? "标签更新成功！" : "标签添加成功！" });
-        await fetchTags();
+        fetchTags();
       }
+    } catch {
+      if (generation === lifecycle.current) { setNeedsReview(true); setFeedback({ type: "error", msg: "无法确认保存结果，输入已保留，请先核对服务器内容。" }); }
     } finally {
-      setSaving(false);
+      if (generation === lifecycle.current) { busy.current = false; setSaving(false); }
     }
   };
 
   const handleDelete = async () => {
-    if (!deleteTarget) return;
+    if (!deleteTarget || busy.current) return;
     const target = deleteTarget;
-    const res = await clientApi.deleteTag(target.id);
-    if (res.error) {
-      setFeedback({ type: "error", msg: `删除失败：${res.error}` });
+    const generation = lifecycle.current;
+    busy.current = true;
+    setDeleting(true);
+    try {
+      const res = await clientApi.deleteTag(target.id, target.version);
+      if (generation !== lifecycle.current) return;
       setDeleteTarget(null);
-      return;
+      if (res.error) setFeedback({ type: "error", msg: `删除未成功确认：${res.error}。请核对列表后再操作。` });
+      else {
+        if (editingTag?.id === target.id) { setEditingTag(null); setName(""); setNeedsReview(false); }
+        setFeedback({ type: "success", msg: `已删除标签「${target.name}」，${target.postCount || 0} 篇文章的关联已解除` });
+      }
+      fetchTags();
+    } finally {
+      if (generation === lifecycle.current) { busy.current = false; setDeleting(false); }
     }
-    setDeleteTarget(null);
-    setTags((prev) => prev.filter((t) => t.id !== target.id));
-    setFeedback({ type: "success", msg: `已删除标签「${target.name}」，${target.postCount || 0} 篇文章的关联已解除` });
   };
 
   return (
-    <div className="min-h-screen flex flex-col relative bg-[#FDFBF7]">
+    <div className="min-h-screen flex flex-col relative">
       <Header admin activePath="/admin/tags" />
 
       <main className="page-container flex-1 py-8 sm:py-12 space-y-10 animate-tab-fade">
@@ -111,8 +171,9 @@ export function AdminTagsView() {
           </div>
         )}
 
-        {/* 2-Column Layout: Tag Operations (Left 8) + Management Guidelines (Right 4) */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        {needsReview && <Button variant="outline" disabled={saving || deleting} onClick={handleReloadForm}>放弃输入并重新加载</Button>}
+        {/* Lock both input and row selection until the submitted snapshot settles. */}
+        <fieldset disabled={saving || deleting} aria-label="标签管理" className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start min-w-0">
           {/* Left: Input & Tag Cloud Grid */}
           <div className="lg:col-span-8 space-y-6">
             <div className="paper-card p-6 sm:p-8 space-y-6">
@@ -126,20 +187,24 @@ export function AdminTagsView() {
                 <form onSubmit={handleAddTag} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                   <input
                     type="text"
+                    aria-label="标签名称"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="输入标签名称（如：前端、设计、思考）"
                     className="flex-1 px-4 py-2.5 text-xs sm:text-sm rounded-full bg-white border border-[#D5C7B2] text-[#1A1A1A] placeholder-[#9E9589] focus:border-[#E65A00] focus:outline-none"
                   />
-                  <Button type="submit" disabled={saving} size="md" className="px-7 shrink-0">
+                  <Button type="submit" disabled={saving || needsReview} size="md" className="px-7 shrink-0">
                     {editingTag ? "保存标签" : "添加标签"}
                   </Button>
                   {editingTag && (
                     <button
                       type="button"
                       onClick={() => {
+                        if (!window.confirm("放弃当前标签输入？")) return;
                         setEditingTag(null);
                         setName("");
+                        setNeedsReview(false);
+                        setFeedback(null);
                       }}
                       className="min-h-11 px-4 text-xs font-semibold text-[#6B655C] hover:text-[#E65A00]"
                     >
@@ -160,13 +225,13 @@ export function AdminTagsView() {
                   <span className="w-1.5 h-4 bg-[#E65A00] rounded-full" />
                   <span>标签列表</span>
                   <span className="text-xs text-[#8C8375] font-normal font-sans">
-                    （共 {tags.length} 个）
+                    {loading || loadError ? "（数量待确认）" : `（共 ${tags.length} 个）`}
                   </span>
                 </div>
 
                 {/* Tag Pills Grid */}
                 <div className="flex flex-wrap items-center gap-3 pt-2">
-                  {tags.map((tag) => (
+                  {loading ? <p role="status" className="py-6 text-sm">正在加载标签…</p> : loadError ? <p role="alert" className="py-6 text-sm text-[#E65A00]">{loadError} <button type="button" onClick={fetchTags}>重试</button></p> : tags.length === 0 ? <p className="py-6 text-sm">暂无标签</p> : tags.map((tag) => (
                     <div
                       key={tag.id}
                       className="group relative inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-[#E65A00] bg-white text-[#E65A00] text-xs sm:text-sm font-semibold transition-all hover:bg-[#FFF5EE]"
@@ -177,6 +242,7 @@ export function AdminTagsView() {
                       </span>
                       <button
                         type="button"
+                        disabled={needsReview}
                         onClick={() => {
                           setEditingTag(tag);
                           setName(tag.name);
@@ -192,11 +258,21 @@ export function AdminTagsView() {
                         onClick={() => setDeleteTarget(tag)}
                         className="opacity-0 group-hover:opacity-100 text-[#8C8375] hover:text-red-600 transition-opacity ml-0.5 cursor-pointer"
                         title="删除标签"
+                        aria-label={`删除标签 ${tag.name}`}
                       >
                         ×
                       </button>
                     </div>
                   ))}
+                </div>
+
+                {/* Mustard tip box, matching redesign-admin-tags-desktop.png */}
+                <div className="flex items-start gap-2.5 rounded-2xl bg-[#FDF3D7] border border-[#F0DFA8] px-4 py-3 text-xs sm:text-sm text-[#6B5518]">
+                  <span aria-hidden="true">💡</span>
+                  <p className="leading-relaxed">
+                    <span className="font-bold">提示：</span>
+                    删除标签不会删除已关联的文章，只会解除关联关系。
+                  </p>
                 </div>
               </div>
             </div>
@@ -254,7 +330,7 @@ export function AdminTagsView() {
               </div>
             </div>
           </div>
-        </div>
+        </fieldset>
 
         {/* Delete Confirmation Modal */}
         <Modal
@@ -263,8 +339,11 @@ export function AdminTagsView() {
           description={`删除标签「${deleteTarget?.name}」后，仅会解除与相关文章的关联，文章本身不会被删除。关联文章数：${deleteTarget?.postCount || 0} 篇。`}
           confirmText="确认删除"
           isDanger
+          confirmPending={deleting}
           onConfirm={handleDelete}
-          onCancel={() => setDeleteTarget(null)}
+          onCancel={() => {
+            if (!deleting) setDeleteTarget(null);
+          }}
         />
       </main>
     </div>

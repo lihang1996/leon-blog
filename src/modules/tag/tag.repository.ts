@@ -1,7 +1,7 @@
 import "server-only";
 import { Prisma } from "@/generated/prisma/client";
-import { isUniqueViolation, prisma, uniqueViolationField } from "@/lib/db/prisma";
-import { ErrorCodes, conflict } from "@/lib/errors";
+import { isNotFoundViolation, isUniqueViolation, prisma, uniqueViolationField } from "@/lib/db/prisma";
+import { AppError, ErrorCodes, conflict } from "@/lib/errors";
 
 /** Map a P2002 on tags to a stable 409 (name vs slug) instead of a 500. */
 function mapTagUniqueConflict(error: unknown): never {
@@ -9,6 +9,15 @@ function mapTagUniqueConflict(error: unknown): never {
   const field = uniqueViolationField(error);
   if (field === "name") throw conflict(ErrorCodes.TAG_NAME_EXISTS, "标签名称已存在");
   throw conflict(ErrorCodes.TAG_SLUG_EXISTS, "标签 slug 已存在");
+}
+
+function mapTagWriteError(error: unknown): never {
+  if (error instanceof AppError) throw error;
+  if (isUniqueViolation(error)) mapTagUniqueConflict(error);
+  if (isNotFoundViolation(error)) {
+    throw conflict(ErrorCodes.TAG_CONCURRENT_MODIFICATION, "标签已被其他操作修改，请刷新后重试");
+  }
+  throw error;
 }
 
 // Tag has no `posts` relation — the link table is `postTags`, so counts come
@@ -29,6 +38,8 @@ export const adminTagSelect = {
   id: true,
   name: true,
   slug: true,
+  updatedAt: true,
+  version: true,
   _count: { select: { postTags: true } },
 } satisfies Prisma.TagSelect;
 
@@ -40,11 +51,13 @@ export const tagRepository = {
   async findPublicTags(): Promise<PublicTagRow[]> {
     const rows = await prisma.tag.findMany({
       select: publicTagSelect,
-      orderBy: { name: "asc" },
     });
-    return rows.filter((row) => row._count.postTags > 0);
+    return rows
+      .filter((row) => row._count.postTags > 0)
+      .sort((a, b) => b._count.postTags - a._count.postTags || a.name.localeCompare(b.name, "zh-CN"));
   },
 
+  /** Public detail by slug — exists even when it currently has zero published posts. */
   async findPublicBySlug(slug: string): Promise<PublicTagRow | null> {
     return prisma.tag.findFirst({
       where: { slug },
@@ -96,16 +109,28 @@ export const tagRepository = {
     }
   },
 
-  async update(id: string, data: { name?: string; slug?: string }): Promise<AdminTagRow> {
+  async update(
+    id: string,
+    data: { name?: string; slug?: string },
+    expectedVersion: number,
+  ): Promise<AdminTagRow> {
     try {
-      return await prisma.tag.update({ where: { id }, data, select: adminTagSelect });
+      return await prisma.tag.update({
+        where: { id, version: expectedVersion },
+        data: { ...data, version: { increment: 1 } },
+        select: adminTagSelect,
+      });
     } catch (error) {
-      mapTagUniqueConflict(error);
+      mapTagWriteError(error);
     }
   },
 
-  async delete(id: string): Promise<void> {
-    await prisma.tag.delete({ where: { id } });
+  async delete(id: string, expectedVersion: number): Promise<void> {
+    try {
+      await prisma.tag.delete({ where: { id, version: expectedVersion } });
+    } catch (error) {
+      mapTagWriteError(error);
+    }
   },
 
   /** Verify every id exists; returns the matching slugs (used by post upserts). */

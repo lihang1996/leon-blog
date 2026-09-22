@@ -8,6 +8,7 @@ export interface ModalProps {
   confirmText?: string;
   cancelText?: string;
   isDanger?: boolean;
+  confirmPending?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -19,6 +20,7 @@ export function Modal({
   confirmText = "确认",
   cancelText = "取消",
   isDanger = false,
+  confirmPending = false,
   onConfirm,
   onCancel,
 }: ModalProps) {
@@ -36,12 +38,13 @@ export function Modal({
           {description}
         </p>
         <div className="flex items-center justify-end gap-3">
-          <Button variant="ghost" size="sm" onClick={onCancel}>
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={confirmPending}>
             {cancelText}
           </Button>
           <Button
             variant={isDanger ? "danger" : "primary"}
             size="sm"
+            pending={confirmPending}
             onClick={onConfirm}
           >
             {confirmText}

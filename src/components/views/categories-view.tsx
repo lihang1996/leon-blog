@@ -1,63 +1,11 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React from "react";
 import Link from "next/link";
 import { Header } from "../ui/header";
 import { Footer } from "../ui/footer";
 import { CategoryIllustratedIcon, CatSittingPlant, PawIcon } from "../ui/cat-doodles";
-import { clientApi, CategoryItem } from "@/lib/client-api";
-
-// Default fallback categories matching redesign-categories-desktop.png
-const DEFAULT_CATEGORIES: (CategoryItem & { iconKey: string })[] = [
-  {
-    id: "1",
-    name: "开发笔记",
-    slug: "dev-notes",
-    description: "记录开发过程中的技术实践与心得",
-    postCount: 32,
-    iconKey: "dev",
-  },
-  {
-    id: "2",
-    name: "产品思考",
-    slug: "product-thinking",
-    description: "分享产品思考与经验总结",
-    postCount: 18,
-    iconKey: "bulb",
-  },
-  {
-    id: "3",
-    name: "设计记录",
-    slug: "design-log",
-    description: "记录设计灵感与创作过程",
-    postCount: 14,
-    iconKey: "design",
-  },
-  {
-    id: "4",
-    name: "工具推荐",
-    slug: "tool-recommendations",
-    description: "推荐实用工具与效率提升",
-    postCount: 11,
-    iconKey: "tool",
-  },
-  {
-    id: "5",
-    name: "生活笔记",
-    slug: "life-notes",
-    description: "记录生活点滴与日常思考",
-    postCount: 9,
-    iconKey: "plane",
-  },
-  {
-    id: "6",
-    name: "工程化",
-    slug: "engineering",
-    description: "工程化实践与项目管理",
-    postCount: 8,
-    iconKey: "coffee",
-  },
-];
+import type { CategoryItem } from "@/lib/client-api";
 
 export function CategoriesView({
   initialData,
@@ -66,33 +14,14 @@ export function CategoriesView({
     categories?: CategoryItem[];
   };
 }) {
-  const [categories, setCategories] = useState<(CategoryItem & { iconKey?: string })[]>(() => {
-    if (initialData?.categories && initialData.categories.length > 0) {
-      const iconKeys = ["dev", "bulb", "design", "tool", "plane", "coffee", "heart", "leaf"];
-      return initialData.categories.map((c, i) => ({
-        ...c,
-        iconKey: c.icon || iconKeys[i % iconKeys.length],
-      }));
-    }
-    return DEFAULT_CATEGORIES;
-  });
-
-  useEffect(() => {
-    clientApi.getCategories().then((res) => {
-      if (res.data && res.data.length > 0) {
-        const iconKeys = ["dev", "bulb", "design", "tool", "plane", "coffee", "heart", "leaf"];
-        setCategories(
-          res.data.map((c, i) => ({
-            ...c,
-            iconKey: c.icon || iconKeys[i % iconKeys.length],
-          }))
-        );
-      }
-    });
-  }, []);
+  const iconKeys = ["dev", "bulb", "design", "tool", "plane", "coffee", "heart", "leaf"];
+  const categories = (initialData?.categories ?? []).map((category, index) => ({
+    ...category,
+    iconKey: category.icon || iconKeys[index % iconKeys.length],
+  }));
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#FDFBF7]">
+    <div className="min-h-screen flex flex-col">
       <Header activePath="/categories" />
 
       <main className="page-container flex-1 py-8 sm:py-12 space-y-12 relative animate-tab-fade">
@@ -150,6 +79,11 @@ export function CategoriesView({
               </span>
             </Link>
           ))}
+          {categories.length === 0 && (
+            <div className="sm:col-span-2 lg:col-span-3 paper-card-dashed p-12 text-center text-sm text-[#8C8375]">
+              暂无公开分类
+            </div>
+          )}
         </div>
 
         {/* Bottom Sitting Cat Illustration */}

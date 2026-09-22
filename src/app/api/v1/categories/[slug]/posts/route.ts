@@ -4,12 +4,17 @@ import { normalizePageParams } from "@/lib/pagination";
 import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
 import { apiPaginated } from "@/lib/api/api-response";
+import { categoryService } from "@/modules/category";
+import { ErrorCodes, notFound } from "@/lib/errors";
 
 /** GET /api/v1/categories/{slug}/posts — published posts in a category (PRD §6.1). */
 export async function GET(request: NextRequest, context: { params: Promise<{ slug: string }> }) {
   const ctx = createRequestContext(request);
   try {
     const { slug } = await context.params;
+    if (!(await categoryService.getPublicCategoryBySlug(slug))) {
+      throw notFound(ErrorCodes.CATEGORY_NOT_FOUND, "分类不存在");
+    }
     const { searchParams } = new URL(request.url);
     const params = normalizePageParams({
       page: searchParams.get("page"),

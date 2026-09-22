@@ -159,6 +159,11 @@ export function PawCursor() {
       return nextIntent;
     };
 
+    const hideCursor = () => {
+      setVisible(false);
+      setState("default");
+    };
+
     const handlePointerMove = (event: PointerEvent) => {
       schedulePositionUpdate(event.clientX, event.clientY);
       const nextIntent = updateStateFromTarget(event.target);
@@ -191,15 +196,25 @@ export function PawCursor() {
       setStamps((currentStamps) => [...currentStamps, stamp].slice(-3));
     };
 
-    const hideCursor = () => {
-      setVisible(false);
-      setState("default");
+    // pointerleave / mouseleave on <html> fire when the pointer exits the document
+    // even if the window keeps focus (common when leaving through the top chrome).
+    const handleDocumentLeave = (event: PointerEvent | MouseEvent) => {
+      const related = event.relatedTarget;
+      if (related instanceof Node && document.documentElement.contains(related)) return;
+      hideCursor();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) hideCursor();
     };
 
     document.addEventListener("pointermove", handlePointerMove, { passive: true });
     document.addEventListener("pointerdown", handlePointerDown, { passive: true });
     document.addEventListener("pointerup", handlePointerUp, { passive: true });
     document.addEventListener("click", handleClick, { passive: true });
+    document.documentElement.addEventListener("pointerleave", handleDocumentLeave);
+    document.documentElement.addEventListener("mouseleave", handleDocumentLeave);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("blur", hideCursor);
 
     return () => {
@@ -207,6 +222,9 @@ export function PawCursor() {
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("pointerup", handlePointerUp);
       document.removeEventListener("click", handleClick);
+      document.documentElement.removeEventListener("pointerleave", handleDocumentLeave);
+      document.documentElement.removeEventListener("mouseleave", handleDocumentLeave);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("blur", hideCursor);
       if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
     };

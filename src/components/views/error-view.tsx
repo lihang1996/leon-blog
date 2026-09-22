@@ -1,7 +1,6 @@
 "use client";
 
 import React from "react";
-import Link from "next/link";
 import { Header } from "../ui/header";
 import { Footer } from "../ui/footer";
 import { Button } from "../ui/button";
@@ -37,23 +36,28 @@ export function ErrorView({
           </p>
         </div>
 
-        {/* Action Buttons */}
+        {/* Action Buttons: primary = 返回首页 per mockup, 重试 demoted to secondary */}
         <div className="space-y-4 pt-2 flex flex-col items-center">
-          {reset ? (
-            <Button onClick={reset} size="lg" className="px-10">
-              重试
-            </Button>
-          ) : (
-            <Button onClick={() => window.location.reload()} size="lg" className="px-10">
-              重试
-            </Button>
-          )}
-          <Link
-            href="/"
-            className="text-xs sm:text-sm font-bold text-[#E65A00] hover:underline"
-          >
+          <Button href="/" size="lg" className="px-10">
             返回首页
-          </Link>
+          </Button>
+          {reset ? (
+            <button
+              type="button"
+              onClick={reset}
+              className="text-xs sm:text-sm font-bold text-[#E65A00] hover:underline cursor-pointer"
+            >
+              重试
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="text-xs sm:text-sm font-bold text-[#E65A00] hover:underline cursor-pointer"
+            >
+              重试
+            </button>
+          )}
         </div>
       </main>
 
@@ -75,9 +79,9 @@ export function EmptyView({
     <div className="paper-card-dashed p-12 flex flex-col items-center justify-center text-center space-y-4 max-w-lg mx-auto">
       <CatSleep className="w-48 h-36" />
       <h3 className="text-xl font-bold font-serif text-[#1A1A1A]">{title}</h3>
-      <Link href={linkHref} className="text-sm font-bold text-[#E65A00] hover:underline">
+      <Button href={linkHref} variant="outline" size="sm" className="mt-2">
         {linkText}
-      </Link>
+      </Button>
     </div>
   );
 }

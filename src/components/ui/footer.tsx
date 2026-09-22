@@ -2,10 +2,11 @@ import React from "react";
 import { SparkleStar } from "./cat-doodles";
 
 export function Footer() {
-  const currentYear = "2024";
+  // 部署方可通过 NEXT_PUBLIC_COPYRIGHT_YEAR 固定年份；未配置时取当前年。
+  const currentYear = process.env.NEXT_PUBLIC_COPYRIGHT_YEAR || String(new Date().getFullYear());
 
   return (
-    <footer className="w-full border-t border-[#E2D6C5] bg-[#FDFBF7] py-8 text-xs text-[#6B655C]">
+    <footer className="w-full border-t border-[#E2D6C5] py-8 text-xs text-[#6B655C]">
       <div className="page-container flex flex-col sm:flex-row items-center justify-between gap-4">
         {/* Left: Copyright & ICP */}
         <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 text-center sm:text-left">
@@ -16,7 +17,6 @@ export function Footer() {
           </span>
           <span>© {currentYear} Leon 的博客 · 由热爱驱动</span>
           <span className="text-[#5B7B5A]" title="持续学习">🍃</span>
-          <span className="text-[#9E9589]">京ICP备2023001234号</span>
         </div>
 
         {/* Right: Slogan & Doodle */}
