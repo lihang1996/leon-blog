@@ -13,12 +13,21 @@ export type Pagination = {
   totalPages: number;
 };
 
-export function apiSuccess<T>(data: T, ctx: { requestId: string }, status = 200): Response {
-  return Response.json({ data }, { status, headers: { ...requestIdHeader(ctx), "Cache-Control": "no-store" } });
+export function apiSuccess<T>(
+  data: T,
+  ctx: { requestId: string },
+  status = 200,
+  extraHeaders?: Record<string, string>,
+): Response {
+  return Response.json({ data }, { status, headers: { ...requestIdHeader(ctx), "Cache-Control": "no-store", ...extraHeaders } });
 }
 
-export function apiCreated<T>(data: T, ctx: { requestId: string }): Response {
-  return Response.json({ data }, { status: 201, headers: { ...requestIdHeader(ctx), "Cache-Control": "no-store" } });
+export function apiCreated<T>(
+  data: T,
+  ctx: { requestId: string },
+  extraHeaders?: Record<string, string>,
+): Response {
+  return Response.json({ data }, { status: 201, headers: { ...requestIdHeader(ctx), "Cache-Control": "no-store", ...extraHeaders } });
 }
 
 export function apiPaginated<T>(
@@ -29,6 +38,9 @@ export function apiPaginated<T>(
   return Response.json({ data, pagination }, { status: 200, headers: { ...requestIdHeader(ctx), "Cache-Control": "no-store" } });
 }
 
-export function apiNoContent(ctx: { requestId: string }): Response {
-  return new Response(null, { status: 204, headers: { ...requestIdHeader(ctx), "Cache-Control": "no-store" } });
+export function apiNoContent(
+  ctx: { requestId: string },
+  extraHeaders?: Record<string, string>,
+): Response {
+  return new Response(null, { status: 204, headers: { ...requestIdHeader(ctx), "Cache-Control": "no-store", ...extraHeaders } });
 }

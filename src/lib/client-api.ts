@@ -110,6 +110,29 @@ export interface ApiResult<T> {
   errorCode?: string;
   details?: unknown;
   requestId?: string;
+  /**
+   * Raw `X-Public-Cache-Status` response header of admin writes:
+   * "invalidated" | "failed" | "not-required" (FR-03 / delivery §4.2).
+   * Missing/other values mean the public-cache state is UNKNOWN — callers
+   * must not treat them as a successful refresh.
+   */
+  cacheStatus?: string;
+}
+
+/**
+ * True when a request failed because the session/permission is gone (401 /
+ * AUTH_REQUIRED / AUTH_INVALID, or the account was disabled). Views must NOT
+ * keep showing previously-loaded admin data in this case — stale statistics
+ * and post rows must be masked with an explicit identity prompt. Network-ish
+ * failures may keep old data with a "可能不是最新" marker; auth failures may not.
+ */
+export function isAuthFailure(result: { status?: number; errorCode?: string | null }): boolean {
+  if (result.status === 401 || result.status === 403) return true;
+  return (
+    result.errorCode === "AUTH_REQUIRED" ||
+    result.errorCode === "AUTH_INVALID" ||
+    result.errorCode === "ADMIN_DISABLED"
+  );
 }
 
 export function normalizePostItem(item: unknown): PostItem {
@@ -167,7 +190,8 @@ async function request<T>(url: string, options?: RequestInit): Promise<ApiResult
   }
 
   const requestId = res.headers.get("x-request-id") ?? undefined;
-  if (res.status === 204) return { data: null, error: null, status: res.status, requestId };
+  const cacheStatus = res.headers.get("x-public-cache-status") ?? undefined;
+  if (res.status === 204) return { data: null, error: null, status: res.status, requestId, cacheStatus };
 
   let json: ApiResponse<T>;
   try {
@@ -196,9 +220,17 @@ async function request<T>(url: string, options?: RequestInit): Promise<ApiResult
     };
   }
 
+  // A 2xx envelope carrying BOTH data and error is contradictory: it proves
+  // neither success nor a definite 4xx rejection (delivery §4.1 "无法解析或
+  // 缺少必需字段的 2xx"). It must surface as INVALID_RESPONSE → unknown —
+  // never as a successful write, and never as a confirmed rejection either.
+  if (json.error) {
+    return { data: null, error: "服务器返回了无法识别的数据", status: res.status, errorCode: "INVALID_RESPONSE", requestId, cacheStatus };
+  }
+
   let rawData: unknown = json.data;
   if (rawData === undefined) {
-    return { data: null, error: "服务器返回了无法识别的数据", status: res.status, errorCode: "INVALID_RESPONSE", requestId };
+    return { data: null, error: "服务器返回了无法识别的数据", status: res.status, errorCode: "INVALID_RESPONSE", requestId, cacheStatus };
   }
   if (Array.isArray(rawData)) {
     rawData = rawData.map((item) =>
@@ -209,7 +241,88 @@ async function request<T>(url: string, options?: RequestInit): Promise<ApiResult
   } else if (isRecord(rawData) && ("title" in rawData || "contentMd" in rawData || "status" in rawData)) {
     rawData = normalizePostItem(rawData);
   }
-  return { data: rawData as T, meta: json.pagination, error: null, status: res.status, requestId };
+  return { data: rawData as T, meta: json.pagination, error: null, status: res.status, requestId, cacheStatus };
+}
+
+/**
+ * Runtime proof that an admin POST-WRITE response actually satisfies the
+ * published contract (delivery §4.1 "缺少必需字段的 2xx" = UNKNOWN outcome;
+ * Codex round-4 review tightened the checks):
+ *
+ * 1. Shape — every REQUIRED `AdminPostDTO` field present with the right type
+ *    (id, title/slug/excerpt/contentMd strings — draft text may be empty but
+ *    must exist —, nullable string fields, string[] tagIds, ISO createdAt /
+ *    updatedAt, status enum, version). The optional nested `category` /
+ *    `tags` refs are not demanded.
+ * 2. Identity — on updates the id must equal the object actually written.
+ * 3. Action target — publish→PUBLISHED, archive→ARCHIVED, restore→DRAFT;
+ *    a 2xx that did not reach the requested state is unknown, never success.
+ * 4. Version progression — the server bumps +1 per PATCH (repository
+ *    `updateInTransaction`) and creates at version 0, so the response version
+ *    is checked against request.version + 1 (updates) / 0 (create). If the
+ *    contract ever changes, update this proof AND its tests together.
+ * 5. Status code — create is 201; ONLY a bodyless 204 proves a hard delete.
+ *
+ * A parseable but non-conforming 2xx must never reach the views as success:
+ * it is rewritten to INVALID_RESPONSE (→ FR-02 "unknown": draft and baseline
+ * kept, editor locked for review, no success UI, no navigation, no replay).
+ */
+const ADMIN_POST_STATUSES: readonly string[] = ["DRAFT", "PUBLISHED", "ARCHIVED"];
+
+/** The status a conforming response must carry for each status action. */
+export const ACTION_TARGET_STATUS = {
+  publish: "PUBLISHED",
+  archive: "ARCHIVED",
+  restore: "DRAFT",
+} as const;
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+/** Every REQUIRED AdminPostDTO field exists with the correct type. */
+function adminPostDtoShapeValid(data: Record<string, unknown>): boolean {
+  if (typeof data.title !== "string" || typeof data.slug !== "string") return false;
+  if (typeof data.excerpt !== "string" || typeof data.contentMd !== "string") return false;
+  if (typeof data.createdAt !== "string" || typeof data.updatedAt !== "string") return false;
+  if (!isNullableString(data.coverImageUrl)) return false;
+  if (!isNullableString(data.seoTitle) || !isNullableString(data.seoDescription)) return false;
+  if (!isNullableString(data.seoImageUrl) || !isNullableString(data.categoryId)) return false;
+  if (!isNullableString(data.publishedAt)) return false;
+  if (!Array.isArray(data.tagIds) || !data.tagIds.every((tagId) => typeof tagId === "string")) return false;
+  return true;
+}
+
+function adminPostWriteResponseValid(
+  data: unknown,
+  expectation: {
+    expectedId?: string;
+    expectedStatus?: string;
+    expectedVersion?: number;
+  },
+): boolean {
+  if (!isRecord(data)) return false;
+  const id = data.id;
+  const status = data.status;
+  const version = data.version;
+  if (typeof id !== "string" || id.length === 0) return false;
+  if (expectation.expectedId !== undefined && id !== expectation.expectedId) return false;
+  if (typeof status !== "string" || !ADMIN_POST_STATUSES.includes(status)) return false;
+  if (expectation.expectedStatus !== undefined && status !== expectation.expectedStatus) return false;
+  if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0 || version > 2147483647) return false;
+  if (expectation.expectedVersion !== undefined && version !== expectation.expectedVersion) return false;
+  return adminPostDtoShapeValid(data);
+}
+
+/** Rewrites a corrupt 2xx into the INVALID_RESPONSE unknown-outcome shape. */
+function invalidPostWriteResponse<T>(res: ApiResult<T>): ApiResult<T> {
+  return {
+    data: null,
+    error: "服务器返回了无法识别的数据",
+    status: res.status,
+    errorCode: "INVALID_RESPONSE",
+    requestId: res.requestId,
+  };
 }
 
 export const clientApi = {
@@ -295,10 +408,17 @@ export const clientApi = {
     seoDescription?: string | null;
     seoImageUrl?: string | null;
   }) {
-    return request<AdminPostItem>("/api/v1/admin/posts", {
+    const res = await request<AdminPostItem>("/api/v1/admin/posts", {
       method: "POST",
       body: JSON.stringify(input),
     });
+    // Response-boundary proof (delivery §4.1): the create contract is
+    // 201 + DRAFT + version 0 + a complete AdminPostDTO. Anything else is a
+    // corrupt success → UNKNOWN, never a created post.
+    if (res.error) return res;
+    const created = res.status === 201
+      && adminPostWriteResponseValid(res.data, { expectedStatus: "DRAFT", expectedVersion: 0 });
+    return created ? res : invalidPostWriteResponse(res);
   },
 
   async updatePost(
@@ -318,18 +438,63 @@ export const clientApi = {
       };
       action?: "publish" | "archive" | "restore";
       version: number;
-    }
+    },
+    /**
+     * CLIENT-ONLY verification parameter — never serialized into the request
+     * body. The caller must state the status a conforming response has to
+     * carry: the action's target (publish→PUBLISHED, archive→ARCHIVED,
+     * restore→DRAFT) for action requests, or the editor's known PRE-SAVE
+     * status for a content save (the server preserves it; only optimistic
+     * locking can change the outcome). Requiring it makes an unverified
+     * "saved" claim impossible: a caller without a reliable baseline must
+     * re-read before saving rather than trust any no-action 2xx.
+     */
+    verification: { expectedStatus: AdminPostItem["status"] },
   ) {
-    return request<AdminPostItem>(`/api/v1/admin/posts/${id}`, {
+    const res = await request<AdminPostItem>(`/api/v1/admin/posts/${id}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     });
+    // The contract is HTTP 200 (apiSuccess default on the PATCH route) with
+    // the written object's id, version = request + 1 (the repository bumps
+    // exactly once per PATCH), and the EXPECTED status. Anything else —
+    // another 2xx, a mismatched id/status/version, or a mixed data+error
+    // envelope — is a corrupt success → UNKNOWN (no success UI, no
+    // navigation, no auto-replay).
+    if (res.error) return res;
+    const valid = res.status === 200
+      && adminPostWriteResponseValid(res.data, {
+        expectedId: id,
+        expectedStatus: verification.expectedStatus,
+        expectedVersion: payload.version + 1,
+    });
+    return valid ? res : invalidPostWriteResponse(res);
   },
 
   async deletePost(id: string, version: number) {
-    return request<void>(`/api/v1/admin/posts/${id}`, {
+    const res = await request<void>(`/api/v1/admin/posts/${id}`, {
       method: "DELETE",
       headers: { "If-Match": `"${version}"` },
+    });
+    // The DELETE contract is 204 with an empty body; ONLY that proves a
+    // definite hard delete. Any other 2xx (e.g. 200 with a JSON body) is a
+    // corrupt success → UNKNOWN: the editor must not enter its
+    // deleted-confirmed state, not navigate away, and never auto-retry the
+    // delete. Definite error classifications (401/403/409/422) pass through.
+    if (res.error) return res;
+    return res.status === 204 ? res : invalidPostWriteResponse(res);
+  },
+
+  /**
+   * Standalone public-cache refresh (FR-03 / delivery §4.2.3): retries ONLY
+   * the cache invalidation for the blog's fixed public tags/paths. It never
+   * repeats a create/update/publish/archive/delete, so calling it again after
+   * a "刷新失败" warning is always safe.
+   */
+  async revalidatePublicCache() {
+    return request<{ cacheStatus: string }>("/api/v1/admin/cache/revalidate", {
+      method: "POST",
+      body: JSON.stringify({}),
     });
   },
 

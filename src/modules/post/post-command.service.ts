@@ -52,18 +52,6 @@ function isImageUrlAllowed(url: string): boolean {
   return isAllowedImageUrl(url, new Set(getAllowedImageHosts()));
 }
 
-async function categorySlugOf(categoryId: string | null): Promise<string | null> {
-  if (!categoryId) return null;
-  const category = await categoryRepository.findById(categoryId);
-  return category ? category.slug : null;
-}
-
-async function tagSlugsOf(tagIds: string[]): Promise<string[]> {
-  if (tagIds.length === 0) return [];
-  const map = await tagRepository.findSlugsByIds(tagIds);
-  return tagIds.map((id) => map.get(id) ?? "").filter(Boolean);
-}
-
 async function assertTagsExist(tagIds: string[]): Promise<void> {
   if (tagIds.length === 0) return;
   const map = await tagRepository.findSlugsByIds(tagIds);
@@ -95,11 +83,13 @@ export const postCommandService = {
       throw conflict(ErrorCodes.POST_SLUG_EXISTS, "文章 slug 已存在");
     }
 
-    const tagIds = dedupe(args.input.tagIds ?? []);
+    // Normalize UUID case before dedupe/comparison: the same tag id written in
+    // different cases is one identity, otherwise `assertTagsExist` (which
+    // compares by distinct DB rows) would misreport "存在不存在的标签".
+    const tagIds = dedupe((args.input.tagIds ?? []).map((id) => id.toLowerCase()));
     const categoryId = args.input.categoryId ?? null;
     await assertTagsExist(tagIds);
     await assertCategoryExists(categoryId);
-    const newTagSlugs = await tagSlugsOf(tagIds);
 
     const row = await postRepository.create({
       authorId: args.actorId,
@@ -115,15 +105,18 @@ export const postCommandService = {
       tagIds,
     });
 
+    // The committed row already carries the associations (category + tag
+    // relations) the invalidation plan needs — no extra post-commit query
+    // can lose this result (FR-03 / AC-03-02).
     return {
       post: toAdminDetail(row),
       changeSet: {
         oldSlug: null,
         newSlug: slug,
         oldCategorySlug: null,
-        newCategorySlug: null,
+        newCategorySlug: row.category?.slug ?? null,
         oldTagSlugs: [],
-        newTagSlugs,
+        newTagSlugs: row.postTags.map((pt) => pt.tag.slug),
       },
     };
   },
@@ -139,8 +132,10 @@ export const postCommandService = {
       throw conflict(ErrorCodes.POST_CONCURRENT_MODIFICATION, "文章已被其他操作修改，请刷新后重试");
     }
 
-    const oldCategorySlug = await categorySlugOf(existing.categoryId);
-    const oldTagSlugs = await tagSlugsOf(existing.postTags.map((pt) => pt.tagId));
+    // The loaded row already carries the OLD associations (category + tag
+    // relations) for the invalidation plan — no separate lookups.
+    const oldCategorySlug = existing.category?.slug ?? null;
+    const oldTagSlugs = existing.postTags.map((pt) => pt.tag.slug);
 
     const content = args.input.content;
     let status = existing.status;
@@ -184,7 +179,9 @@ export const postCommandService = {
     const categoryId = content?.categoryId !== undefined ? (content.categoryId ?? null) : existing.categoryId;
     await assertCategoryExists(categoryId);
 
-    const tagIds = content?.tagIds !== undefined ? dedupe(content.tagIds) : existing.postTags.map((pt) => pt.tagId);
+    const tagIds = content?.tagIds !== undefined
+      ? dedupe(content.tagIds.map((id) => id.toLowerCase()))
+      : existing.postTags.map((pt) => pt.tagId);
     await assertTagsExist(tagIds);
 
     // ---- Publish readiness --------------------------------------------------
@@ -225,36 +222,54 @@ export const postCommandService = {
       ...(publishedAt !== existing.publishedAt ? { publishedAt } : {}),
     });
 
-    const newCategorySlug = await categorySlugOf(row.categoryId);
-    const newTagSlugs = await tagSlugsOf(row.postTags.map((pt) => pt.tagId));
-
+    // Build the plan data from the transaction's returned row only: after the
+    // commit is confirmed, no additional DB query may run (and fail) before
+    // the caller learns the write succeeded (FR-03 / AC-03-02).
     return {
       post: toAdminDetail(row),
       changeSet: {
         oldSlug: existing.slug,
         newSlug: row.slug,
         oldCategorySlug,
-        newCategorySlug,
+        newCategorySlug: row.category?.slug ?? null,
         oldTagSlugs,
-        newTagSlugs,
+        newTagSlugs: row.postTags.map((pt) => pt.tag.slug),
       },
     };
   },
 
-  /** Only DRAFT posts can be hard-deleted (architecture §7.2). */
-  async deleteDraft(args: { postId: string; version: number }): Promise<void> {
+  /**
+   * Hard-delete a DRAFT or ARCHIVED post. PUBLISHED must be archived first.
+   * Optimistic-version + conditional delete keeps the check-then-act race
+   * closed (a concurrent publish makes the delete a 409, not data loss).
+   * Returns the pre-delete associations so the caller can invalidate the
+   * PUBLIC caches (an ever-published archived post still has live public
+   * pages under its old slug) — only meaningful after the delete committed.
+   */
+  async deleteDraft(args: { postId: string; version: number }): Promise<PostChangeSet> {
     const existing = await postRepository.findAdminById(args.postId);
     if (!existing) throw notFound(ErrorCodes.POST_NOT_FOUND, "文章不存在");
     if (existing.version !== args.version) {
       throw conflict(ErrorCodes.POST_CONCURRENT_MODIFICATION, "文章已被其他操作修改，请刷新后重试");
     }
     if (!canHardDelete(existing.status)) {
-      throw unprocessable(ErrorCodes.INVALID_POST_TRANSITION, "只允许删除草稿");
+      throw unprocessable(ErrorCodes.INVALID_POST_TRANSITION, "已发布文章需先归档后才能删除");
     }
-    const deleted = await postRepository.deleteDraftConditionally(existing.id, args.version);
+    const deleted = await postRepository.deleteConditionally(existing.id, args.version, [
+      "DRAFT",
+      "ARCHIVED",
+    ]);
     if (!deleted) {
       throw conflict(ErrorCodes.POST_CONCURRENT_MODIFICATION, "文章状态已变化，请刷新后重试");
     }
+    return {
+      oldSlug: existing.slug,
+      newSlug: "",
+      oldCategorySlug: existing.category?.slug ?? null,
+      newCategorySlug: null,
+      oldTagSlugs: existing.postTags.map((pt) => pt.tag.slug),
+      newTagSlugs: [],
+    };
   },
 };
 

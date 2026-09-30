@@ -1,9 +1,11 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { postCommandService } from "@/modules/post";
 import { ErrorCodes, AppError } from "@/lib/errors";
 import { prisma } from "@/lib/db/prisma";
 import { resetDatabase, createAdminUser, createTag } from "./helpers";
 import { postRepository } from "@/modules/post/post.repository";
+import { categoryRepository } from "@/modules/category/category.repository";
+import { tagRepository } from "@/modules/tag/tag.repository";
 import { updatePostSchema } from "@/modules/post";
 
 /**
@@ -268,6 +270,28 @@ describe("post↔tag transaction", () => {
     expect(updated.changeSet.newTagSlugs).toEqual(["yi"]);
   });
 
+  it("treats mixed-case tag UUIDs as the same identity (FR-22)", async () => {
+    const tag = await createTag("大小写", "case-tag");
+    const upper = tag.id.toUpperCase();
+    const mixed = upper.slice(0, 14) + tag.id.slice(14, 23).toUpperCase() + tag.id.slice(23);
+
+    // Same id in three cases on create: one identity, no "存在不存在的标签".
+    const created = await postCommandService.createDraft({
+      actorId: authorId,
+      input: draftInput({ tagIds: [upper, mixed, tag.id] }),
+    });
+    expect(created.post.tagIds).toEqual([tag.id]);
+
+    // Mixed-case replacement on update keeps working and dedupes to one.
+    const updated = await postCommandService.updatePost({
+      postId: created.post.id,
+      actorId: authorId,
+      input: { content: { tagIds: [mixed] }, version: created.post.version },
+    });
+    expect(updated.post.tagIds).toEqual([tag.id]);
+    expect(updated.changeSet.newTagSlugs).toEqual(["case-tag"]);
+  });
+
   it("keeps existing tags on a title-only PATCH payload", async () => {
     const tag = await createTag("保留", "keep");
     const created = await postCommandService.createDraft({
@@ -364,12 +388,193 @@ describe("deleteDraft", () => {
     expect(await postRepository.findAdminById(post.id)).toBeNull();
   });
 
-  it("guards the repository delete by both version and DRAFT status", async () => {
+  it("guards the repository delete by version and the DRAFT|ARCHIVED status set", async () => {
     const { post } = await postCommandService.createDraft({ actorId: authorId, input: draftInput() });
     const saved = await postRepository.updateInTransaction(post.id, { title: "已保存", expectedVersion: post.version });
-    expect(await postRepository.deleteDraftConditionally(post.id, post.version)).toBe(false);
+    // stale version → no-op
+    expect(await postRepository.deleteConditionally(post.id, post.version, ["DRAFT", "ARCHIVED"])).toBe(false);
     const published = await postRepository.updateInTransaction(post.id, { status: "PUBLISHED", publishedAt: new Date(), expectedVersion: saved.version });
-    expect(await postRepository.deleteDraftConditionally(post.id, published.version)).toBe(false);
+    // status no longer deletable → no-op
+    expect(await postRepository.deleteConditionally(post.id, published.version, ["DRAFT", "ARCHIVED"])).toBe(false);
     expect(await postRepository.findAdminById(post.id)).toMatchObject({ status: "PUBLISHED", version: published.version });
+
+    // archive then hard-delete succeeds
+    const archived = await postRepository.updateInTransaction(post.id, { status: "ARCHIVED", expectedVersion: published.version });
+    expect(await postRepository.deleteConditionally(post.id, archived.version, ["DRAFT", "ARCHIVED"])).toBe(true);
+    expect(await postRepository.findAdminById(post.id)).toBeNull();
+  });
+});
+
+describe("FR-03: commit result and invalidation data are one unit (AC-03-01/02)", () => {
+  it("builds the update changeSet from the loaded + transaction rows with NO post-commit association lookups", async () => {
+    const categoryA = await prisma.category.create({ data: { name: "甲类", slug: "cat-a" }, select: { id: true, slug: true } });
+    const categoryB = await prisma.category.create({ data: { name: "乙类", slug: "cat-b" }, select: { id: true, slug: true } });
+    const tagOld = await createTag("旧", "old-tag");
+    const tagNew = await createTag("新", "new-tag");
+
+    const created = await postCommandService.createDraft({
+      actorId: authorId,
+      input: draftInput({ slug: "plan", categoryId: categoryA.id, tagIds: [tagOld.id] }),
+    });
+
+    const findById = vi.fn();
+    const findSlugs = vi.fn();
+    const realFindById = categoryRepository.findById.bind(categoryRepository);
+    const realFindSlugs = tagRepository.findSlugsByIds.bind(tagRepository);
+    const spyFindById = vi.spyOn(categoryRepository, "findById").mockImplementation(async (id: string) => {
+      findById(id);
+      return realFindById(id);
+    });
+    const spyFindSlugs = vi.spyOn(tagRepository, "findSlugsByIds").mockImplementation(async (ids: string[]) => {
+      findSlugs(ids);
+      return realFindSlugs(ids);
+    });
+
+    try {
+      const result = await postCommandService.updatePost({
+        postId: created.post.id,
+        actorId: authorId,
+        input: {
+          content: { title: "改题", categoryId: categoryB.id, tagIds: [tagNew.id] },
+          version: created.post.version,
+        },
+      });
+
+      // Only the PRE-commit existence checks ran: one category lookup (the new
+      // category) and one tag lookup (the new tags). The old associations come
+      // from the loaded row and the new ones from the transaction row — a
+      // failing lookup after the commit can no longer orphan the result.
+      expect(findById).toHaveBeenCalledTimes(1);
+      expect(findById).toHaveBeenCalledWith(categoryB.id);
+      expect(findSlugs).toHaveBeenCalledTimes(1);
+      expect(findSlugs).toHaveBeenCalledWith([tagNew.id]);
+
+      // The plan data is complete and correct without any post-commit query.
+      expect(result.changeSet).toEqual({
+        oldSlug: "plan",
+        newSlug: "plan",
+        oldCategorySlug: "cat-a",
+        newCategorySlug: "cat-b",
+        oldTagSlugs: ["old-tag"],
+        newTagSlugs: ["new-tag"],
+      });
+    } finally {
+      spyFindById.mockRestore();
+      spyFindSlugs.mockRestore();
+    }
+  });
+
+  it("builds the create changeSet from the committed row (associations included)", async () => {
+    const category = await prisma.category.create({ data: { name: "创建类", slug: "cat-create" }, select: { id: true, slug: true } });
+    const tag = await createTag("创建标签", "created-tag");
+
+    const { changeSet } = await postCommandService.createDraft({
+      actorId: authorId,
+      input: draftInput({ slug: "fresh", categoryId: category.id, tagIds: [tag.id] }),
+    });
+
+    expect(changeSet).toEqual({
+      oldSlug: null,
+      newSlug: "fresh",
+      oldCategorySlug: null,
+      newCategorySlug: "cat-create",
+      oldTagSlugs: [],
+      newTagSlugs: ["created-tag"],
+    });
+  });
+
+  it("rolls the whole update back when the transaction fails — no partial write (AC-03-01)", async () => {
+    const tag = await createTag("存在", "exists");
+    const { post } = await postCommandService.createDraft({
+      actorId: authorId,
+      input: draftInput({ slug: "atomic", tagIds: [tag.id] }),
+    });
+
+    await expectError(
+      postCommandService.updatePost({
+        postId: post.id,
+        actorId: authorId,
+        input: {
+          content: {
+            title: "不应生效的标题",
+            tagIds: [tag.id, "00000000-0000-4000-8000-000000000000"],
+          },
+          version: post.version,
+        },
+      }),
+      ErrorCodes.TAG_NOT_FOUND,
+      404,
+    );
+
+    const after = await postRepository.findAdminById(post.id);
+    expect(after).toMatchObject({ title: "测试文章", version: post.version });
+    expect(after?.postTags.map((pt) => pt.tagId)).toEqual([tag.id]);
+  });
+});
+
+describe("deleteConditionally concurrency (B01)", () => {
+  it("rolls back taxonomy bumps when the post row is concurrently modified after the check (count=0 must abort the transaction)", async () => {
+    const category = await prisma.category.create({
+      data: { name: "删除类B01", slug: "cat-del-b01" },
+      select: { id: true, version: true, updatedAt: true },
+    });
+    const tag = await prisma.tag.create({
+      data: { name: "删除标B01", slug: "tag-del-b01" },
+      select: { id: true, version: true, updatedAt: true },
+    });
+    const { post } = await postCommandService.createDraft({ actorId: authorId, input: draftInput() });
+    const stored = await prisma.post.findUniqueOrThrow({
+      where: { slug: post.slug },
+      select: { id: true, version: true },
+    });
+    await prisma.post.update({
+      where: { id: stored.id },
+      data: { categoryId: category.id, postTags: { create: [{ tagId: tag.id }] } },
+    });
+
+    // Barrier inside the check→delete race window: after the taxonomy bumps
+    // have run inside the delete transaction, another writer bumps the post
+    // version, so deleteMany (version-gated) matches 0 rows. The old code
+    // returned false inside the callback → transaction COMMITTED with the
+    // bumps applied; the fix throws inside the tx → full rollback.
+    const deleted = await postRepository.deleteConditionally(
+      stored.id,
+      stored.version,
+      ["DRAFT", "ARCHIVED"],
+      {
+        beforeDelete: async () => {
+          await prisma.post.update({
+            where: { id: stored.id },
+            data: { contentMd: "并发修改", version: { increment: 1 } },
+          });
+        },
+      },
+    );
+
+    expect(deleted).toBe(false);
+
+    // The post survived, carrying the concurrent writer's change.
+    const survivor = await prisma.post.findUniqueOrThrow({
+      where: { id: stored.id },
+      select: { version: true, contentMd: true },
+    });
+    expect(survivor.version).toBe(stored.version + 1);
+    expect(survivor.contentMd).toBe("并发修改");
+
+    // Taxonomy rows are exactly as before the failed delete: version AND
+    // updatedAt untouched (a committed bump would change both).
+    const categoryAfter = await prisma.category.findUniqueOrThrow({
+      where: { id: category.id },
+      select: { version: true, updatedAt: true },
+    });
+    expect(categoryAfter.version).toBe(category.version);
+    expect(categoryAfter.updatedAt).toEqual(category.updatedAt);
+
+    const tagAfter = await prisma.tag.findUniqueOrThrow({
+      where: { id: tag.id },
+      select: { version: true, updatedAt: true },
+    });
+    expect(tagAfter.version).toBe(tag.version);
+    expect(tagAfter.updatedAt).toEqual(tag.updatedAt);
   });
 });

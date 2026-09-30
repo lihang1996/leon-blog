@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>鹈鹕骑自行车</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background: linear-gradient(180deg, #8ecae6 0%, #e7f6ff 58%, #d4ecc8 100%);
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", sans-serif;
+      color: #1d3557;
+    }
+
+    .stage {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px 16px 40px;
+    }
+
+    .card {
+      width: min(920px, 100%);
+      text-align: center;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: clamp(1.4rem, 3vw, 2rem);
+      letter-spacing: 0.04em;
+    }
+
+    p {
+      margin: 0 0 16px;
+      opacity: 0.7;
+    }
+
+    svg {
+      width: 100%;
+      height: auto;
+      overflow: visible;
+      filter: drop-shadow(0 18px 28px rgba(29, 53, 87, 0.16));
+    }
+
+    .ride {
+      animation: bounce 0.4s ease-in-out infinite;
+    }
+
+    .shadow {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: squash 0.4s ease-in-out infinite;
+    }
+
+    /* 轮组画在局部 0,0，父级用 SVG translate 挪到轴心，避免 CSS transform 互相覆盖 */
+    .wheel,
+    .crank {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: spin 0.65s linear infinite;
+    }
+
+    .crank { animation-duration: 0.9s; }
+
+    .chain {
+      stroke-dasharray: 5 7;
+      animation: chain 0.32s linear infinite;
+    }
+
+    .thigh,
+    .shin {
+      transform-box: fill-box;
+      transform-origin: 0 0;
+    }
+
+    .thigh { animation: thigh 0.9s linear infinite; }
+    .shin { animation: shin 0.9s linear infinite; }
+    .far { animation-delay: -0.45s; }
+
+    .wing {
+      transform-box: fill-box;
+      transform-origin: 0 0;
+      animation: wing 0.4s ease-in-out infinite;
+    }
+
+    .pouch {
+      transform-box: fill-box;
+      transform-origin: 50% 0;
+      animation: pouch 0.8s ease-in-out infinite;
+    }
+
+    .cloud-a { animation: drift 18s ease-in-out infinite; }
+    .cloud-b { animation: drift 22s ease-in-out infinite reverse; }
+    .cloud-c { animation: drift 16s ease-in-out infinite; }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(5px); }
+    }
+
+    @keyframes squash {
+      0%, 100% { transform: scale(1, 1); opacity: 0.25; }
+      50% { transform: scale(1.1, 0.82); opacity: 0.16; }
+    }
+
+    @keyframes chain {
+      to { stroke-dashoffset: -12; }
+    }
+
+    @keyframes thigh {
+      0% { transform: rotate(16deg); }
+      25% { transform: rotate(50deg); }
+      50% { transform: rotate(10deg); }
+      75% { transform: rotate(-24deg); }
+      100% { transform: rotate(16deg); }
+    }
+
+    @keyframes shin {
+      0% { transform: rotate(22deg); }
+      25% { transform: rotate(0deg); }
+      50% { transform: rotate(42deg); }
+      75% { transform: rotate(74deg); }
+      100% { transform: rotate(22deg); }
+    }
+
+    @keyframes wing {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(3deg); }
+    }
+
+    @keyframes pouch {
+      0%, 100% { transform: scaleY(1) rotate(0deg); }
+      50% { transform: scaleY(1.045) rotate(1.1deg); }
+    }
+
+    @keyframes drift {
+      0%, 100% { transform: translateX(0); }
+      50% { transform: translateX(-28px); }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <section class="card">
+      <h1>鹈鹕骑行中</h1>
+      <p>纯 CSS Keyframes · SVG path</p>
+
+      <svg viewBox="0 0 840 520" role="img" aria-labelledby="title desc">
+        <title id="title">卡通鹈鹕骑自行车</title>
+        <desc id="desc">扁平卡通风格的鹈鹕骑着红色自行车。车轮绕轴旋转，双腿踩踏板，画面轻微颠簸。</desc>
+
+        <defs>
+          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#73c3e3" />
+            <stop offset="68%" stop-color="#d8f1ff" />
+            <stop offset="100%" stop-color="#c6e4a8" />
+          </linearGradient>
+          <linearGradient id="body" x1="0" y1="0" x2="0.8" y2="1">
+            <stop offset="0%" stop-color="#fffef8" />
+            <stop offset="100%" stop-color="#f3e4b8" />
+          </linearGradient>
+          <linearGradient id="beak" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#ffb703" />
+            <stop offset="100%" stop-color="#fb8500" />
+          </linearGradient>
+          <linearGradient id="pouch" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#ffe066" />
+            <stop offset="100%" stop-color="#e9a825" />
+          </linearGradient>
+        </defs>
+
+        <path fill="url(#sky)" d="M0 0 H840 V520 H0 Z" />
+        <path class="cloud-a" fill="#fff" d="M86 96 C84 74 108 58 132 64 C144 46 176 46 190 64 C214 56 236 76 228 98 C246 106 244 128 218 132 H104 C80 128 72 110 86 96 Z" />
+        <path class="cloud-b" fill="#fff" fill-opacity="0.92" d="M572 82 C572 62 598 52 618 62 C632 46 664 48 674 66 C696 62 714 82 704 100 C720 110 714 132 688 134 H590 C564 128 558 98 572 82 Z" />
+        <path class="cloud-c" fill="#fff" fill-opacity="0.86" d="M326 58 C328 42 350 34 368 44 C380 30 408 32 416 48 C436 46 448 64 438 78 H336 C314 74 312 60 326 58 Z" />
+        <path fill="#ffdd57" d="M736 78 A50 50 0 1 0 736 78.01 Z" />
+        <path fill="#fff3a8" d="M736 78 A30 30 0 1 0 736 78.01 Z" />
+
+        <path fill="#8fbf6a" d="M0 336 C96 286 168 312 250 328 C348 348 412 292 508 314 C610 338 704 286 840 322 V402 H0 Z" />
+        <path fill="#6ea44c" d="M0 376 C140 352 230 394 340 370 C450 346 540 396 660 372 C748 354 798 380 840 368 V520 H0 Z" />
+        <path fill="#f2d7a6" d="M0 414 C170 400 290 428 430 414 C570 400 690 430 840 416 V520 H0 Z" />
+        <path fill="none" stroke="#e9c46a" stroke-width="6" stroke-linecap="round" stroke-dasharray="26 20" d="M24 460 C170 446 310 472 450 458 C590 444 710 470 822 456" />
+
+        <path class="shadow" fill="#1d3557" d="M214 452 C258 430 530 430 574 452 C528 470 258 470 214 452 Z" />
+
+        <g class="ride">
+          <!-- 远侧腿 -->
+          <g transform="translate(354 276)">
+            <g class="thigh far">
+              <path fill="#e09f3e" d="M-10 0 C4 8 16 32 14 56 C4 58 -18 26 -14 4 Z" />
+              <g transform="translate(10 54)">
+                <g class="shin far">
+                  <path fill="#d68c2b" d="M-8 0 C6 12 10 34 4 52 C-6 50 -16 18 -12 2 Z" />
+                  <path fill="#ee9b00" d="M-16 48 C-12 38 16 36 26 48 C18 62 -12 62 -16 48 Z" />
+                </g>
+              </g>
+            </g>
+          </g>
+
+          <!-- 后轮 -->
+          <g transform="translate(268 372)">
+            <g class="wheel">
+              <path fill="transparent" d="M-58 0 A58 58 0 1 0 58 0 A58 58 0 1 0 -58 0 Z" />
+              <path fill="#1d3557" fill-rule="evenodd" d="M-58 0 A58 58 0 1 0 58 0 A58 58 0 1 0 -58 0 Z M-46 0 A46 46 0 1 0 46 0 A46 46 0 1 0 -46 0 Z" />
+              <path fill="none" stroke="#ced4da" stroke-width="3" d="M-42 0 A42 42 0 1 0 42 0 A42 42 0 1 0 -42 0" />
+              <path fill="none" stroke="#495057" stroke-width="2.4" d="M0 -42 L0 42 M-42 0 L42 0 M-30 -30 L30 30 M30 -30 L-30 30" />
+              <path fill="#e63946" d="M-10 0 A10 10 0 1 0 10 0 A10 10 0 1 0 -10 0 Z" />
+              <path fill="#1d3557" d="M-4.5 0 A4.5 4.5 0 1 0 4.5 0 A4.5 4.5 0 1 0 -4.5 0 Z" />
+            </g>
+          </g>
+
+          <!-- 前轮 -->
+          <g transform="translate(512 372)">
+            <g class="wheel">
+              <path fill="transparent" d="M-58 0 A58 58 0 1 0 58 0 A58 58 0 1 0 -58 0 Z" />
+              <path fill="#1d3557" fill-rule="evenodd" d="M-58 0 A58 58 0 1 0 58 0 A58 58 0 1 0 -58 0 Z M-46 0 A46 46 0 1 0 46 0 A46 46 0 1 0 -46 0 Z" />
+              <path fill="none" stroke="#ced4da" stroke-width="3" d="M-42 0 A42 42 0 1 0 42 0 A42 42 0 1 0 -42 0" />
+              <path fill="none" stroke="#495057" stroke-width="2.4" d="M0 -42 L0 42 M-42 0 L42 0 M-30 -30 L30 30 M30 -30 L-30 30" />
+              <path fill="#e63946" d="M-10 0 A10 10 0 1 0 10 0 A10 10 0 1 0 -10 0 Z" />
+              <path fill="#1d3557" d="M-4.5 0 A4.5 4.5 0 1 0 4.5 0 A4.5 4.5 0 1 0 -4.5 0 Z" />
+            </g>
+          </g>
+
+          <path class="chain" fill="none" stroke="#343a40" stroke-width="3.2" d="M268 372 C270 394 338 404 358 370 C338 348 270 350 268 372" />
+
+          <g fill="none" stroke="#e63946" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M268 372 L358 368" />
+            <path d="M268 372 L326 246" />
+            <path d="M358 368 L326 246" />
+            <path d="M326 246 L474 252" />
+            <path d="M358 368 L474 252" />
+            <path d="M512 372 L474 252" />
+          </g>
+          <path fill="none" stroke="#9d0208" stroke-width="3" stroke-linecap="round" d="M326 246 L358 368" />
+
+          <path fill="#1d3557" d="M300 250 C296 238 314 230 346 234 L356 246 C348 258 298 262 300 250 Z" />
+
+          <path fill="none" stroke="#1d3557" stroke-width="8" stroke-linecap="round" d="M474 252 L464 224" />
+          <path fill="none" stroke="#1d3557" stroke-width="9" stroke-linecap="round" d="M432 222 C448 208 486 208 508 230" />
+          <path fill="#e76f51" d="M424 218 C420 210 434 204 444 214 C438 224 426 226 424 218 Z" />
+          <path fill="#e76f51" d="M504 226 C508 216 526 222 524 234 C512 242 500 236 504 226 Z" />
+
+          <g transform="translate(358 368)">
+            <g class="crank">
+              <path fill="transparent" d="M-18 -46 H18 V46 H-18 Z" />
+              <path fill="#1d3557" d="M-9 -9 H9 V9 H-9 Z" />
+              <path fill="none" stroke="#1d3557" stroke-width="7" stroke-linecap="round" d="M0 0 L0 36" />
+              <path fill="#495057" d="M-16 31 H16 V44 H-16 Z" />
+              <path fill="none" stroke="#1d3557" stroke-width="7" stroke-linecap="round" d="M0 0 L0 -36" />
+              <path fill="#343a40" d="M-16 -44 H16 V-31 H-16 Z" />
+            </g>
+          </g>
+
+          <!-- 尾巴 -->
+          <path fill="#f0e0b0" d="M248 236 C222 222 206 236 204 258 C220 258 242 264 262 266 Z" />
+
+          <!-- 身体：坐在座垫上的卵形，而不是正圆 -->
+          <path fill="url(#body)" stroke="#ead7a2" stroke-width="2" d="M258 220 C252 178 292 148 342 154 C384 160 402 194 392 230 C384 262 348 278 308 268 C272 258 262 242 258 220 Z" />
+          <path fill="#f7edd0" d="M300 218 C324 210 360 218 370 240 C356 258 322 262 296 248 C290 234 292 224 300 218 Z" />
+
+          <!-- 翅膀搭上车把 -->
+          <g transform="translate(336 220)">
+            <g class="wing">
+              <path fill="#fff6d9" stroke="#ead7a2" stroke-width="2" d="M-16 0 C-22 24 -8 52 18 56 C46 48 58 24 48 4 C36 -14 4 -16 -16 0 Z" />
+              <path fill="none" stroke="#e2cc96" stroke-width="3" stroke-linecap="round" d="M-2 16 C14 24 30 26 44 20" />
+              <path fill="none" stroke="#e2cc96" stroke-width="3" stroke-linecap="round" d="M0 30 C16 38 32 38 46 32" />
+              <path fill="#fff6d9" d="M36 8 C62 2 100 8 122 22 C102 36 64 32 36 20 Z" />
+            </g>
+          </g>
+
+          <!-- 粗颈，连到小头 -->
+          <path fill="url(#body)" stroke="#ead7a2" stroke-width="2" d="M338 176 C360 150 400 132 442 146 C452 150 450 166 438 168 C404 154 368 168 346 198 C338 190 334 180 338 176 Z" />
+
+          <path fill="#fffdf6" stroke="#ead7a2" stroke-width="2" d="M428 118 C422 98 444 82 470 88 C494 94 504 116 494 134 C482 154 448 152 428 118 Z" />
+          <path fill="#f4a261" d="M450 90 C446 76 466 70 478 80 C468 94 454 96 450 90 Z" />
+
+          <!-- 标志性喉囊 + 大喙 -->
+          <g transform="translate(468 148)">
+            <g class="pouch">
+              <path fill="url(#pouch)" d="M-8 8 C28 18 84 32 118 34 C104 74 62 108 14 104 C-28 100 -34 58 -16 28 C-12 18 -10 12 -8 8 Z" />
+              <path fill="#f0b429" d="M8 42 C42 38 80 50 94 64 C72 72 34 68 8 58 Z" />
+            </g>
+          </g>
+          <path fill="url(#beak)" d="M468 132 C478 122 548 132 608 156 C622 160 622 172 608 176 C548 158 480 148 470 142 Z" />
+          <path fill="#c1121f" d="M594 160 C598 158 608 162 606 170 C598 172 590 164 594 160 Z" />
+
+          <path fill="#1d3557" d="M458 116 A9 9 0 1 0 458 116.01 Z" />
+          <path fill="#fff" d="M455 112 A3.2 3.2 0 1 0 455 112.01 Z" />
+          <path fill="#f4a261" fill-opacity="0.5" d="M452 134 C450 142 462 146 466 138 C464 130 454 128 452 134 Z" />
+
+          <!-- 近侧腿 -->
+          <g transform="translate(346 274)">
+            <g class="thigh">
+              <path fill="#f4a261" d="M-10 0 C6 10 18 34 16 58 C6 60 -20 28 -16 4 Z" />
+              <g transform="translate(12 56)">
+                <g class="shin">
+                  <path fill="#ee9b00" d="M-8 0 C8 14 10 36 4 54 C-6 52 -18 20 -14 2 Z" />
+                  <path fill="#ffb703" d="M-18 50 C-14 38 18 36 28 50 C20 64 -14 64 -18 50 Z" />
+                </g>
+              </g>
+            </g>
+          </g>
+        </g>
+      </svg>
+    </section>
+  </main>
+</body>
+</html>

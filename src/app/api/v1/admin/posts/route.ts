@@ -7,6 +7,7 @@ import { normalizePageParams } from "@/lib/pagination";
 import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
 import { apiPaginated, apiCreated } from "@/lib/api/api-response";
+import { PUBLIC_CACHE_STATUS_HEADER } from "@/lib/api/invalidate";
 import { logger } from "@/lib/logger/logger";
 
 /** GET /api/v1/admin/posts — all-status posts (PRD §6.3). Admin only. */
@@ -40,7 +41,9 @@ export async function POST(request: NextRequest) {
     const input = createPostSchema.parse(await readAdminJsonBody(request));
     const { post } = await postCommandService.createDraft({ actorId: admin.id, input });
     logger.info("admin.post.created", { requestId: ctx.requestId, postId: post.id });
-    return apiCreated(post, ctx);
+    // A DRAFT is invisible to every public query, so no public cache can hold
+    // stale content because of it — the header contract still applies (§4.2.1).
+    return apiCreated(post, ctx, { [PUBLIC_CACHE_STATUS_HEADER]: "not-required" });
   } catch (error) {
     return handleApiError(error, ctx);
   }

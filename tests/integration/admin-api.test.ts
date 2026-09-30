@@ -260,7 +260,19 @@ describe("category/tag DELETE (bodyless 415 regression)", () => {
       input: { action: "publish", version: created.post.version },
     });
 
-    await deleteTag(makeRequest(`http://localhost:3000/api/v1/admin/tags/${tag.id}`, { method: "DELETE", origin: ORIGIN, ifMatch: `"${tag.version}"` }), routeContext({ id: tag.id }));
+    // FR-04/§4.3: linking the post bumped the tag's membership epoch, so the
+    // stale creation-time version must now conflict (AC-05-01 semantics).
+    // Re-read the fresh version — the refreshed confirmation succeeds (AC-05-03).
+    const stale = await deleteTag(
+      makeRequest(`http://localhost:3000/api/v1/admin/tags/${tag.id}`, { method: "DELETE", origin: ORIGIN, ifMatch: `"${tag.version}"` }),
+      routeContext({ id: tag.id }),
+    );
+    expect(stale.status).toBe(409);
+    const refreshed = (await tagService.listAdminTags()).find((item) => item.id === tag.id)!;
+    await deleteTag(
+      makeRequest(`http://localhost:3000/api/v1/admin/tags/${tag.id}`, { method: "DELETE", origin: ORIGIN, ifMatch: `"${refreshed.version}"` }),
+      routeContext({ id: tag.id }),
+    );
 
     const detail = await postQueryService.getPublishedPostBySlug("tagged");
     expect(detail).not.toBeNull();

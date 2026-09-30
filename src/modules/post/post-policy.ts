@@ -32,9 +32,13 @@ export function canTransition(from: PostStatus, to: PostStatus): boolean {
   return TRANSITIONS[from]?.has(to) ?? false;
 }
 
-/** Only drafts can be hard-deleted (architecture §7.2). */
+/**
+ * Hard-delete rules: drafts 删除无痕；archived 已先经过「下线」这一显式动作，
+ * 允许直接清理。PUBLISHED 必须先归档再删——公开内容永远经由显式的下线状态
+ * 才可被物理删除（2026-09 产品决定，替代原"仅草稿可删"）。
+ */
 export function canHardDelete(status: PostStatus): boolean {
-  return status === "DRAFT";
+  return status === "DRAFT" || status === "ARCHIVED";
 }
 
 // ---- Validation issue shape ----------------------------------------------

@@ -105,13 +105,16 @@ export const tagService = {
     const existing = await tagRepository.findById(id);
     if (!existing) throw notFound(ErrorCodes.TAG_NOT_FOUND, "标签不存在");
     if (existing.version !== version) {
-      throw conflict(ErrorCodes.TAG_CONCURRENT_MODIFICATION, "标签已被其他操作修改，请刷新后重试");
+      throw conflict(ErrorCodes.TAG_CONCURRENT_MODIFICATION, "标签或关联文章已变化，请刷新后重新确认");
     }
     const affectedPostSlugs = await tagRepository.findPublishedPostSlugs(id);
-    await tagRepository.delete(id, version);
+    // FR-04/05: link removal + per-post version/updatedAt bumps + the delete
+    // itself in ONE transaction; linkedPostCount is the transaction's real
+    // affected-post count, never the client's stale snapshot number.
+    const linkedPostCount = await tagRepository.deleteAndUnlink(id, version);
     return {
       changeSet: { oldSlug: existing.slug, newSlug: existing.slug, affectedPostSlugs },
-      linkedPostCount: existing._count.postTags,
+      linkedPostCount,
     };
   },
 };

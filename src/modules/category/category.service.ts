@@ -169,13 +169,17 @@ export const categoryService = {
     const existing = await categoryRepository.findById(id);
     if (!existing) throw notFound(ErrorCodes.CATEGORY_NOT_FOUND, "分类不存在");
     if (existing.version !== version) {
-      throw conflict(ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION, "分类已被其他操作修改，请刷新后重试");
+      throw conflict(ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION, "分类或关联文章已变化，请刷新后重新确认");
     }
     const affectedPostSlugs = await categoryRepository.findPublishedPostSlugs(id);
-    await categoryRepository.delete(id, version);
+    // FR-04/05: unlink + per-post version/updatedAt bumps + the delete itself
+    // commit (or roll back) in ONE transaction; the returned count is the
+    // transaction's real affected-post count (FR-05.7 log value), never the
+    // client's stale snapshot number.
+    const affectedPostCount = await categoryRepository.deleteAndUnlink(id, version);
     return {
       changeSet: { oldSlug: existing.slug, newSlug: existing.slug, affectedPostSlugs },
-      affectedPostCount: existing._count.posts,
+      affectedPostCount,
     };
   },
 };

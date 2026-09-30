@@ -7,7 +7,7 @@ import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
 import { apiSuccess, apiCreated } from "@/lib/api/api-response";
 import { buildCategoryInvalidationPlan } from "@/lib/cache/cache-invalidation";
-import { applyInvalidation } from "@/lib/api/invalidate";
+import { applyInvalidation, PUBLIC_CACHE_STATUS_HEADER } from "@/lib/api/invalidate";
 import { logger } from "@/lib/logger/logger";
 
 /** GET /api/v1/admin/categories — admin list (PRD §6.4). */
@@ -32,9 +32,13 @@ export async function POST(request: NextRequest) {
     ctx.userId = admin.id;
     const input = createCategorySchema.parse(await readAdminJsonBody(request));
     const { category, changeSet } = await categoryService.createCategory(input);
-    await applyInvalidation(buildCategoryInvalidationPlan(changeSet), ctx.requestId);
-    logger.info("admin.category.created", { requestId: ctx.requestId, categoryId: category.id });
-    return apiCreated(category, ctx);
+    const cacheStatus = await applyInvalidation(
+      buildCategoryInvalidationPlan(changeSet),
+      ctx.requestId,
+      { kind: "category", id: category.id },
+    );
+    logger.info("admin.category.created", { requestId: ctx.requestId, categoryId: category.id, cacheStatus });
+    return apiCreated(category, ctx, { [PUBLIC_CACHE_STATUS_HEADER]: cacheStatus });
   } catch (error) {
     return handleApiError(error, ctx);
   }

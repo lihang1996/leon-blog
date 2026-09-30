@@ -112,9 +112,9 @@ describe("category service", () => {
       ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION,
       409,
     );
-    await expectError(categoryRepository.delete(category.id, category.version), ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION, 409);
+    await expectError(categoryRepository.deleteAndUnlink(category.id, category.version), ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION, 409);
     expect(await categoryRepository.findById(category.id)).toMatchObject({ name: "已保存", version: updated.version });
-    await categoryRepository.delete(category.id, updated.version);
+    await categoryRepository.deleteAndUnlink(category.id, updated.version);
   });
 
   it("maps delete-after-delete to 404 instead of 500", async () => {
@@ -171,9 +171,9 @@ describe("tag service", () => {
     const updated = await tagRepository.update(tag.id, { name: "已保存" }, tag.version);
     expect(updated).toMatchObject({ name: "已保存", version: tag.version + 1 });
     await expectError(tagRepository.update(tag.id, { name: "过期" }, tag.version), ErrorCodes.TAG_CONCURRENT_MODIFICATION, 409);
-    await expectError(tagRepository.delete(tag.id, tag.version), ErrorCodes.TAG_CONCURRENT_MODIFICATION, 409);
+    await expectError(tagRepository.deleteAndUnlink(tag.id, tag.version), ErrorCodes.TAG_CONCURRENT_MODIFICATION, 409);
     expect(await tagRepository.findById(tag.id)).toMatchObject({ name: "已保存", version: updated.version });
-    await tagRepository.delete(tag.id, updated.version);
+    await tagRepository.deleteAndUnlink(tag.id, updated.version);
   });
 
   it("maps delete-after-delete to 404 instead of 500", async () => {

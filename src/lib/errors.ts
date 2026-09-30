@@ -26,6 +26,7 @@ export const ErrorCodes = {
   PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
   RATE_LIMITED: "RATE_LIMITED",
   UNSUPPORTED_MEDIA_TYPE: "UNSUPPORTED_MEDIA_TYPE",
+  CACHE_REVALIDATION_FAILED: "CACHE_REVALIDATION_FAILED",
   FORBIDDEN: "FORBIDDEN",
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;
@@ -72,4 +73,9 @@ export function unprocessable(code: ErrorCode, message: string, details?: unknow
 /** 413 — JSON body exceeds the admin write byte cap. */
 export function payloadTooLarge(message = "请求体超过大小限制"): AppError {
   return new AppError(ErrorCodes.PAYLOAD_TOO_LARGE, 413, message);
+}
+
+/** 503 — a committed write or explicit refresh could not invalidate public caches (FR-03 / delivery §4.2). */
+export function cacheRevalidationFailed(details?: unknown): AppError {
+  return new AppError(ErrorCodes.CACHE_REVALIDATION_FAILED, 503, "公开缓存刷新失败，请稍后重试", details);
 }

@@ -9,7 +9,7 @@ import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
 import { apiSuccess, apiNoContent } from "@/lib/api/api-response";
 import { buildTagInvalidationPlan } from "@/lib/cache/cache-invalidation";
-import { applyInvalidation } from "@/lib/api/invalidate";
+import { applyInvalidation, PUBLIC_CACHE_STATUS_HEADER } from "@/lib/api/invalidate";
 import { logger } from "@/lib/logger/logger";
 
 /** PATCH /api/v1/admin/tags/{id} (PRD §6.5). */
@@ -23,9 +23,13 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     assertAdminUuid(id);
     const input = updateTagSchema.parse(await readAdminJsonBody(request));
     const { tag, changeSet } = await tagService.updateTag(id, input);
-    await applyInvalidation(buildTagInvalidationPlan(changeSet), ctx.requestId);
-    logger.info("admin.tag.updated", { requestId: ctx.requestId, tagId: tag.id });
-    return apiSuccess(tag, ctx);
+    const cacheStatus = await applyInvalidation(
+      buildTagInvalidationPlan(changeSet),
+      ctx.requestId,
+      { kind: "tag", id: tag.id },
+    );
+    logger.info("admin.tag.updated", { requestId: ctx.requestId, tagId: tag.id, cacheStatus });
+    return apiSuccess(tag, ctx, 200, { [PUBLIC_CACHE_STATUS_HEADER]: cacheStatus });
   } catch (error) {
     return handleApiError(error, ctx);
   }
@@ -43,9 +47,13 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
     assertAdminUuid(id);
     const version = parseExpectedVersion(request.headers.get("if-match"));
     const { changeSet, linkedPostCount } = await tagService.deleteTag(id, version);
-    await applyInvalidation(buildTagInvalidationPlan(changeSet), ctx.requestId);
-    logger.info("admin.tag.deleted", { requestId: ctx.requestId, tagId: id, linkedPostCount });
-    return apiNoContent(ctx);
+    const cacheStatus = await applyInvalidation(
+      buildTagInvalidationPlan(changeSet),
+      ctx.requestId,
+      { kind: "tag", id },
+    );
+    logger.info("admin.tag.deleted", { requestId: ctx.requestId, tagId: id, linkedPostCount, cacheStatus });
+    return apiNoContent(ctx, { [PUBLIC_CACHE_STATUS_HEADER]: cacheStatus });
   } catch (error) {
     return handleApiError(error, ctx);
   }

@@ -7,7 +7,7 @@ import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
 import { apiSuccess, apiCreated } from "@/lib/api/api-response";
 import { buildTagInvalidationPlan } from "@/lib/cache/cache-invalidation";
-import { applyInvalidation } from "@/lib/api/invalidate";
+import { applyInvalidation, PUBLIC_CACHE_STATUS_HEADER } from "@/lib/api/invalidate";
 import { logger } from "@/lib/logger/logger";
 
 /** GET /api/v1/admin/tags — admin list (PRD §6.5). */
@@ -32,9 +32,13 @@ export async function POST(request: NextRequest) {
     ctx.userId = admin.id;
     const input = createTagSchema.parse(await readAdminJsonBody(request));
     const { tag, changeSet } = await tagService.createTag(input);
-    await applyInvalidation(buildTagInvalidationPlan(changeSet), ctx.requestId);
-    logger.info("admin.tag.created", { requestId: ctx.requestId, tagId: tag.id });
-    return apiCreated(tag, ctx);
+    const cacheStatus = await applyInvalidation(
+      buildTagInvalidationPlan(changeSet),
+      ctx.requestId,
+      { kind: "tag", id: tag.id },
+    );
+    logger.info("admin.tag.created", { requestId: ctx.requestId, tagId: tag.id, cacheStatus });
+    return apiCreated(tag, ctx, { [PUBLIC_CACHE_STATUS_HEADER]: cacheStatus });
   } catch (error) {
     return handleApiError(error, ctx);
   }

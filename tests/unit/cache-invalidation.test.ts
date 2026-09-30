@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildInvalidationPlan,
   buildCategoryInvalidationPlan,
+  buildFullPublicInvalidationPlan,
   buildTagInvalidationPlan,
   applyInvalidationPlan,
   type PostChangeSet,
@@ -22,6 +23,12 @@ describe("buildInvalidationPlan", () => {
     expect(plan.paths).toContain("/");
     expect(plan.paths).toContain("/posts");
     expect(plan.tags).toContain("posts");
+  });
+
+  it("always expires the cached sitemap alongside the public pages (FR-03 / delivery §4.2.4)", () => {
+    expect(buildInvalidationPlan(base).paths).toContain("/sitemap.xml");
+    expect(buildCategoryInvalidationPlan({ oldSlug: "a", newSlug: "b", affectedPostSlugs: [] }).paths).toContain("/sitemap.xml");
+    expect(buildTagInvalidationPlan({ oldSlug: "a", newSlug: "b", affectedPostSlugs: [] }).paths).toContain("/sitemap.xml");
   });
 
   it("covers old and new post slugs", () => {
@@ -148,5 +155,46 @@ describe("applyInvalidationPlan", () => {
     expect(revalidatePath).toHaveBeenCalledWith("/posts");
     expect(revalidateTag).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports which targets failed without throwing (FR-03 / delivery §4.2)", async () => {
+    const revalidatePath = vi.fn((path: string) => {
+      if (path === "/broken") throw new Error("path failed");
+    });
+    const revalidateTag = vi.fn((tag: string) => {
+      if (tag === "post:gone") throw new Error("tag failed");
+    });
+
+    const result = await applyInvalidationPlan(
+      { paths: ["/broken", "/posts"], tags: ["posts", "post:gone"] },
+      { revalidatePath, revalidateTag, onError: vi.fn() },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.failedTargets).toEqual(["path:/broken", "tag:post:gone"]);
+    // Every other target was still attempted — a single failure skips nothing.
+    expect(revalidatePath).toHaveBeenCalledWith("/posts");
+    expect(revalidateTag).toHaveBeenCalledWith("posts", { expire: 0 });
+  });
+
+  it("reports ok when every target succeeds", async () => {
+    const result = await applyInvalidationPlan(
+      { paths: ["/", "/posts"], tags: ["posts"] },
+      { revalidatePath: vi.fn(), revalidateTag: vi.fn(), onError: vi.fn() },
+    );
+    expect(result).toEqual({ ok: true, failedTargets: [] });
+  });
+});
+
+describe("buildFullPublicInvalidationPlan (standalone revalidate endpoint)", () => {
+  it("covers the blog's fixed public tags and paths, sitemap included", () => {
+    const plan = buildFullPublicInvalidationPlan();
+    expect([...plan.paths].sort()).toEqual(["/", "/categories", "/posts", "/sitemap.xml", "/tags"].sort());
+    expect([...plan.tags].sort()).toEqual(["categories", "posts", "tags"].sort());
+  });
+
+  it("is a fixed set: no per-entity detail tags can appear", () => {
+    const plan = buildFullPublicInvalidationPlan();
+    expect(plan.tags.every((tag) => !tag.includes(":"))).toBe(true);
   });
 });

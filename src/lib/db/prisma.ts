@@ -73,3 +73,39 @@ export function uniqueViolationField(error: unknown): string | null {
   const target = Array.isArray(meta?.target) ? meta?.target[0] : meta?.target;
   return typeof target === "string" && target.length > 0 ? target : null;
 }
+
+/**
+ * Prisma foreign-key violation (P2003). Structural check like the unique
+ * violation helper above (FR-21): only ever the START of the classification —
+ * callers must additionally whitelist the CONSTRAINT (see
+ * `foreignKeyConstraintName`) before mapping anything to a business error.
+ */
+export function isForeignKeyViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "P2003";
+}
+
+/**
+ * The violated FK constraint name. With the pg driver adapter the underlying
+ * PostgreSQL error carries `constraint` as a plain string (e.g.
+ * "post_tags_tag_id_fkey") under the same `driverAdapterError.cause` path as
+ * the unique-violation fields.
+ */
+export function foreignKeyConstraintName(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) return null;
+  const meta = (error as {
+    meta?: {
+      constraint?: unknown;
+      driverAdapterError?: { cause?: { constraint?: unknown } };
+    };
+  }).meta;
+  const candidate = meta?.driverAdapterError?.cause?.constraint ?? meta?.constraint;
+  // Raw pg errors expose `constraint` as a plain string; Prisma's serialized
+  // form carries it as `{ index: "…_fkey" }` (verified against the real
+  // adapter — see tests/integration/taxonomy-versions.test.ts).
+  if (typeof candidate === "string" && candidate.length > 0) return candidate;
+  if (typeof candidate === "object" && candidate !== null) {
+    const index = (candidate as { index?: unknown }).index;
+    if (typeof index === "string" && index.length > 0) return index;
+  }
+  return null;
+}

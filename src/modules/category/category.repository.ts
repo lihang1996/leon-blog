@@ -1,7 +1,7 @@
 import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { isNotFoundViolation, isUniqueViolation, prisma, uniqueViolationField } from "@/lib/db/prisma";
-import { AppError, ErrorCodes, conflict } from "@/lib/errors";
+import { AppError, ErrorCodes, conflict, notFound } from "@/lib/errors";
 
 /** Map a P2002 on categories to a stable 409 (name vs slug) instead of a 500. */
 function mapCategoryUniqueConflict(error: unknown): never {
@@ -152,11 +152,33 @@ export const categoryRepository = {
     }
   },
 
-  async delete(id: string, expectedVersion: number): Promise<void> {
-    try {
-      await prisma.category.delete({ where: { id, version: expectedVersion } });
-    } catch (error) {
-      mapCategoryWriteError(error);
-    }
+  /**
+   * Transactional delete (FR-04/FR-05): locks and version-guards the
+   * category FIRST (taxonomy rows before posts, §4.3), then unlinks every
+   * affected post — bumping its version + updatedAt in the same statement —
+   * and finally removes the row. The FK is ON DELETE SET NULL, so the unlink
+   * MUST run before the row disappears. A zero-row guard bump means the
+   * confirmation is stale (membership changed since If-Match) or the target
+   * is gone: same-transaction rollback, nothing unlinked.
+   */
+  async deleteAndUnlink(id: string, expectedVersion: number): Promise<number> {
+    return prisma.$transaction(async (tx) => {
+      const guard = await tx.category.updateMany({
+        where: { id, version: expectedVersion },
+        data: { version: { increment: 1 } },
+      });
+      if (guard.count === 0) {
+        const exists = await tx.category.findUnique({ where: { id }, select: { id: true } });
+        throw exists
+          ? conflict(ErrorCodes.CATEGORY_CONCURRENT_MODIFICATION, "分类或关联文章已变化，请刷新后重新确认")
+          : notFound(ErrorCodes.CATEGORY_NOT_FOUND, "分类不存在");
+      }
+      const affected = await tx.post.updateMany({
+        where: { categoryId: id },
+        data: { categoryId: null, version: { increment: 1 } },
+      });
+      await tx.category.deleteMany({ where: { id } });
+      return affected.count;
+    });
   },
 };

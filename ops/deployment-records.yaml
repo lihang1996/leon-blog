@@ -1,0 +1,49 @@
+# ------------------------------------------------------------------------------
+# leon-blog 生产部署事实登记（当事人申报侧）
+# ------------------------------------------------------------------------------
+# 本文件只是"申报"：它自身不能证明任何 SHA 已在生产环境生效（13 号审查
+# 约束 A1）。核验由 leon_knowledge 的 kb-sync 在受信任侧执行，核验态台账
+# 位于 leon_knowledge/_config/deployment-records/leon-blog.yaml；两份记录
+# 相互独立，本文件不得自证上线。
+#
+# 字段契约（每条记录）：
+#   environment      目标环境；本博客当前仅 production 有意义
+#   effective_sha    该环境实际生效的 40 位 commit SHA（仅核验态 verified
+#                    记录可决定此值；申报时按证据填写）
+#   deployment_id    部署平台部署 ID 或人工顺序号，全局唯一
+#   evidence_source.kind:
+#       platform_api               平台 API/签名回调，可由可信服务端程序化回查
+#       platform_console_artifact  控制台截图/导出，存档于 ops/evidence/
+#       manual_verified            维护人从生产环境/部署平台亲眼核验后登记
+#       simulated                  仅限本地测试 fixture，禁止进入本真实台账
+#   evidence_source.ref  证据位置（ops/evidence/ 文件名或平台 URL）
+#   effective_at     上线生效时间（ISO-8601，含时区）
+#   tag              仅关联代码候选，不构成上线证明
+#   note             备注（迁移、回滚说明等；不得包含凭据或连接串）
+#
+# 记录状态流转（由核验方维护，本文件中不得自行标 verified）：
+#   claimed → evidence_pending → verified | rejected
+#   只有 verified 记录的 effective_sha 才能被当作该环境的上线事实。
+#
+# 当前状态：
+#   records: []      —— 尚无任何真实部署记录。
+#   真实部署平台：unknown（仓库内无 Dockerfile / vercel.json / standalone
+#   配置，README 未指明平台）。在平台与证据形态查明并取得可信证据之前，
+#   本博客的一切生产部署状态保持 unknown，任何 tag / master 合并 / CI 绿
+#   都不得写入或推断为上线事实。
+#
+# 模拟示例 —— 仅供理解字段结构，禁止作为真实记录抄写（simulated 只能出
+# 现在测试 fixture 中；真实台账出现 simulated 即为 rejected）：
+#
+#   - environment: production
+#     effective_sha: 0123456789abcdef0123456789abcdef01234567   # 示例占位，非真实上线 SHA
+#     deployment_id: dep-simulated-0001
+#     evidence_source:
+#       kind: simulated
+#       ref: tests/fixtures/deployment-simulated.md
+#     effective_at: "2099-01-01T00:00:00+08:00"
+#     tag: v0.0.0-simulated
+#     note: "simulated 演示条目：字段结构示例，不代表任何真实部署"
+
+schema_version: 1
+records: []

@@ -7,16 +7,70 @@ import { Modal } from "../../ui/modal";
 import { CatTagsSleep, TitleBrushUnderline } from "../../ui/cat-doodles";
 import { clientApi, type AdminTagItem } from "@/lib/client-api";
 import { slugifyLabel } from "@/lib/slug";
-import { mutationErrorMessage, mutationNeedsReview } from "./editor-state";
+import { cacheRefreshWarningText, evaluateCacheStatus, mutationErrorMessage, mutationNeedsReview } from "./editor-state";
+import { CacheRefreshWarning } from "./cache-refresh-warning";
+import { shouldConfirmTargetSwitch, tagFormDirty, type TagFormBaseline } from "./taxonomy-form-state";
+import { ensureAdminLeaveGuard, unregisterAdminLeaveGuard } from "./logout-guard";
+import { useEditorLeaveGuard } from "./use-editor-leave-guard";
 
-export function AdminTagsView() {
-  const [tags, setTags] = useState<AdminTagItem[]>([]);
+/**
+ * One tag pill with its always-visible edit and delete entries (FR-13):
+ * nothing here is hover-gated; the delete control keeps the accessible name
+ * `删除标签 {名称}`, a visible focus ring, and a 44px touch target. Both
+ * buttons only dispatch to the parent's existing edit/confirm flows.
+ */
+export function AdminTagPill({
+  tag,
+  needsReview,
+  onEdit,
+  onDelete,
+}: {
+  tag: AdminTagItem;
+  needsReview: boolean;
+  onEdit: (tag: AdminTagItem) => void;
+  onDelete: (tag: AdminTagItem) => void;
+}) {
+  return (
+    <div className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-full border border-[#E65A00] bg-white text-[#E65A00] text-xs sm:text-sm font-semibold transition-all hover:bg-[#FFF5EE]">
+      <span>{tag.name}</span>
+      <span className="text-xs text-[#E65A00]/80">{tag.postCount || 0}</span>
+      <button
+        type="button"
+        disabled={needsReview}
+        onClick={() => onEdit(tag)}
+        className="ml-1 inline-flex min-h-11 items-center px-1.5 text-[#6B655C] hover:text-[#E65A00] transition-colors cursor-pointer rounded-md outline-none focus-visible:ring-2 focus-visible:ring-[#E65A00]"
+        title="编辑标签"
+      >
+        编辑
+      </button>
+      <button
+        type="button"
+        onClick={() => onDelete(tag)}
+        className="ml-0.5 inline-flex h-11 w-11 items-center justify-center rounded-full text-lg leading-none text-[#8C8375] hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#E65A00]"
+        title="删除标签"
+        aria-label={`删除标签 ${tag.name}`}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+export function AdminTagsView() {  const [tags, setTags] = useState<AdminTagItem[]>([]);
   const [name, setName] = useState("");
   const [editingTag, setEditingTag] = useState<AdminTagItem | null>(null);
+  // FR-06: the single editable field's baseline; create mode starts at "".
+  const [baseline, setBaseline] = useState<TagFormBaseline>({ id: null, version: null, name: "" });
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AdminTagItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Confirmed write whose public-cache refresh failed / is unknown (FR-03,
+  // delivery §4.2.1-2): separate warning + fixed-set refresh retry only
+  // (Codex review #4).
+  const [cacheWarning, setCacheWarning] = useState<string | null>(null);
+  const [refreshingCache, setRefreshingCache] = useState(false);
 
   const [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -24,6 +78,24 @@ export function AdminTagsView() {
   const [needsReview, setNeedsReview] = useState(false);
   const lifecycle = useRef(0);
   const busy = useRef(false);
+
+  const dirty = tagFormDirty(baseline, name);
+
+  // FR-06: leaving with unsaved tag text (or an unconfirmed write) confirms
+  // first; the guard covers cancel paths, back/forward, and refresh. Without
+  // the Navigation API, back/forward cannot be intercepted — the banner is
+  // the explicit fallback (refresh/close and in-app links stay guarded).
+  const historyGuardAvailable = useEditorLeaveGuard(dirty || saving || needsReview);
+
+  // FR-20: header logout decision sees this form's unsaved/busy state.
+  useEffect(() => {
+    ensureAdminLeaveGuard("admin-tags", {
+      blocked: dirty || needsReview,
+      busy: saving || deleting,
+      subject: "标签管理表单",
+    });
+    return () => { unregisterAdminLeaveGuard("admin-tags"); };
+  }, [dirty, needsReview, saving, deleting]);
 
   useLayoutEffect(() => {
     lifecycle.current += 1;
@@ -52,9 +124,16 @@ export function AdminTagsView() {
   }, [revision]);
   const fetchTags = () => { setLoading(true); setRevision((value) => value + 1); };
 
+  /** Unconditional form load: name AND baseline (FR-06.3 keeps id/version). */
+  const applyTagToForm = (tag: AdminTagItem | null) => {
+    setEditingTag(tag);
+    setName(tag?.name ?? "");
+    setBaseline({ id: tag?.id ?? null, version: tag?.version ?? null, name: tag?.name ?? "" });
+  };
+
   const handleReloadForm = async () => {
     if (busy.current || !window.confirm("丢弃当前输入并重新载入服务器最新标签？")) return;
-    const targetId = editingTag?.id;
+    const targetId = baseline.id;
     const generation = lifecycle.current;
     busy.current = true;
     setSaving(true);
@@ -66,8 +145,7 @@ export function AdminTagsView() {
       setLoadError("");
       const latest = res.data.find((tag) => tag.id === targetId);
       if (targetId && !latest) { setFeedback({ type: "error", msg: "该标签已不存在。输入已保留，可取消编辑。" }); return; }
-      setEditingTag(latest ?? null);
-      setName(latest?.name ?? "");
+      applyTagToForm(latest ?? null);
       setFeedback(null);
       setNeedsReview(false);
     } finally {
@@ -99,8 +177,16 @@ export function AdminTagsView() {
         setNeedsReview(mutationNeedsReview(res));
         setFeedback({ type: "error", msg: mutationErrorMessage(res) });
       } else {
+        const evaluated = evaluateCacheStatus(res.cacheStatus);
+        setCacheWarning(
+          evaluated === "failed" || evaluated === "unknown"
+            ? cacheRefreshWarningText(editingTag ? "标签已保存" : "标签已创建", evaluated)
+            : null,
+        );
+        // Confirmed save moves the baseline (FR-06.5).
         setName("");
         setEditingTag(null);
+        setBaseline({ id: null, version: null, name: "" });
         setFeedback({ type: "success", msg: editingTag ? "标签更新成功！" : "标签添加成功！" });
         fetchTags();
       }
@@ -108,6 +194,19 @@ export function AdminTagsView() {
       if (generation === lifecycle.current) { setNeedsReview(true); setFeedback({ type: "error", msg: "无法确认保存结果，输入已保留，请先核对服务器内容。" }); }
     } finally {
       if (generation === lifecycle.current) { busy.current = false; setSaving(false); }
+    }
+  };
+
+  // One click = one fixed-set refresh request; it never repeats the tag write.
+  const handleRetryCacheRefresh = async () => {
+    if (refreshingCache) return;
+    setRefreshingCache(true);
+    try {
+      const res = await clientApi.revalidatePublicCache();
+      if (!res.error && res.data?.cacheStatus === "invalidated") setCacheWarning(null);
+      // Failures keep the warning for a later manual retry.
+    } finally {
+      setRefreshingCache(false);
     }
   };
 
@@ -121,10 +220,26 @@ export function AdminTagsView() {
       const res = await clientApi.deleteTag(target.id, target.version);
       if (generation !== lifecycle.current) return;
       setDeleteTarget(null);
-      if (res.error) setFeedback({ type: "error", msg: `删除未成功确认：${res.error}。请核对列表后再操作。` });
+      if (res.errorCode === "TAG_CONCURRENT_MODIFICATION") {
+        // FR-05.5: the association set changed since the confirmation — never
+        // auto-refresh the version and continue deleting.
+        setFeedback({ type: "error", msg: "标签或关联文章已变化，请刷新后重新确认。" });
+      } else if (res.error) setFeedback({ type: "error", msg: `删除未成功确认：${res.error}。请核对列表后再操作。` });
       else {
-        if (editingTag?.id === target.id) { setEditingTag(null); setName(""); setNeedsReview(false); }
-        setFeedback({ type: "success", msg: `已删除标签「${target.name}」，${target.postCount || 0} 篇文章的关联已解除` });
+        const evaluated = evaluateCacheStatus(res.cacheStatus);
+        setCacheWarning(
+          evaluated === "failed" || evaluated === "unknown"
+            ? cacheRefreshWarningText("标签已删除", evaluated)
+            : null,
+        );
+        if (editingTag?.id === target.id) {
+          setEditingTag(null);
+          setName("");
+          setBaseline({ id: null, version: null, name: "" });
+          setNeedsReview(false);
+        }
+        // FR-05.6: no client-side counts in the success copy; articles are kept.
+        setFeedback({ type: "success", msg: `已删除标签「${target.name}」，相关关联已解除，文章保留` });
       }
       fetchTags();
     } finally {
@@ -171,7 +286,14 @@ export function AdminTagsView() {
           </div>
         )}
 
+        {cacheWarning && (
+          <CacheRefreshWarning message={cacheWarning} onRetry={handleRetryCacheRefresh} refreshing={refreshingCache} />
+        )}
+
         {needsReview && <Button variant="outline" disabled={saving || deleting} onClick={handleReloadForm}>放弃输入并重新加载</Button>}
+        {!historyGuardAvailable && (
+          <p role="alert" className="text-xs text-[#E65A00]">此浏览器不支持安全的后退/前进保护，离开前请保存或复制当前输入，建议使用最新版浏览器。</p>
+        )}
         {/* Lock both input and row selection until the submitted snapshot settles. */}
         <fieldset disabled={saving || deleting} aria-label="标签管理" className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start min-w-0">
           {/* Left: Input & Tag Cloud Grid */}
@@ -200,9 +322,11 @@ export function AdminTagsView() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (!window.confirm("放弃当前标签输入？")) return;
+                        // FR-06.5: no prompt when the name was never changed.
+                        if (dirty && !window.confirm("放弃当前标签输入？（取消将完整保留当前输入）")) return;
                         setEditingTag(null);
                         setName("");
+                        setBaseline({ id: null, version: null, name: "" });
                         setNeedsReview(false);
                         setFeedback(null);
                       }}
@@ -232,37 +356,22 @@ export function AdminTagsView() {
                 {/* Tag Pills Grid */}
                 <div className="flex flex-wrap items-center gap-3 pt-2">
                   {loading ? <p role="status" className="py-6 text-sm">正在加载标签…</p> : loadError ? <p role="alert" className="py-6 text-sm text-[#E65A00]">{loadError} <button type="button" onClick={fetchTags}>重试</button></p> : tags.length === 0 ? <p className="py-6 text-sm">暂无标签</p> : tags.map((tag) => (
-                    <div
+                    <AdminTagPill
                       key={tag.id}
-                      className="group relative inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-[#E65A00] bg-white text-[#E65A00] text-xs sm:text-sm font-semibold transition-all hover:bg-[#FFF5EE]"
-                    >
-                      <span>{tag.name}</span>
-                      <span className="text-xs text-[#E65A00]/80">
-                        {tag.postCount || 0}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={needsReview}
-                        onClick={() => {
-                          setEditingTag(tag);
-                          setName(tag.name);
-                          setFeedback(null);
-                        }}
-                        className="opacity-70 group-hover:opacity-100 text-[#6B655C] hover:text-[#E65A00] transition-opacity ml-1 cursor-pointer"
-                        title="编辑标签"
-                      >
-                        编辑
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteTarget(tag)}
-                        className="opacity-0 group-hover:opacity-100 text-[#8C8375] hover:text-red-600 transition-opacity ml-0.5 cursor-pointer"
-                        title="删除标签"
-                        aria-label={`删除标签 ${tag.name}`}
-                      >
-                        ×
-                      </button>
-                    </div>
+                      tag={tag}
+                      needsReview={needsReview}
+                      onEdit={(target) => {
+                        // FR-06.4: re-clicking the tag being edited never
+                        // overwrites in-progress input; switching confirms.
+                        if (target.id === baseline.id) return;
+                        if (shouldConfirmTargetSwitch(dirty, baseline.id, target.id)) {
+                          if (!window.confirm("当前标签输入尚未保存。确认放弃并切换到该标签吗？（取消将完整保留当前输入）")) return;
+                        }
+                        applyTagToForm(target);
+                        setFeedback(null);
+                      }}
+                      onDelete={(target) => setDeleteTarget(target)}
+                    />
                   ))}
                 </div>
 

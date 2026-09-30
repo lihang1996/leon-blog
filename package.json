@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "next dev --webpack",
-    "build": "next build --webpack",
+    "build": "tsx scripts/prebuild-sitemap-db.ts && next build --webpack",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",

@@ -9,7 +9,7 @@ import { createRequestContext } from "@/lib/api/request-context";
 import { handleApiError } from "@/lib/api/api-error-handler";
 import { apiSuccess, apiNoContent } from "@/lib/api/api-response";
 import { buildInvalidationPlan } from "@/lib/cache/cache-invalidation";
-import { applyInvalidation } from "@/lib/api/invalidate";
+import { applyInvalidation, PUBLIC_CACHE_STATUS_HEADER } from "@/lib/api/invalidate";
 import { ErrorCodes, notFound } from "@/lib/errors";
 import { logger } from "@/lib/logger/logger";
 
@@ -47,19 +47,26 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       input,
     });
 
-    // Invalidate public cache ONLY after the DB transaction committed.
-    await applyInvalidation(buildInvalidationPlan(changeSet), ctx.requestId);
-    logger.info("admin.post.updated", { requestId: ctx.requestId, postId: post.id, status: post.status });
-    return apiSuccess(post, ctx);
+    // Invalidate public cache ONLY after the DB transaction committed; the
+    // write stays successful even when invalidation fails — the header tells
+    // the client which one happened (FR-03 / delivery §4.2).
+    const cacheStatus = await applyInvalidation(
+      buildInvalidationPlan(changeSet),
+      ctx.requestId,
+      { kind: "post", id: post.id, version: post.version },
+    );
+    logger.info("admin.post.updated", { requestId: ctx.requestId, postId: post.id, status: post.status, cacheStatus });
+    return apiSuccess(post, ctx, 200, { [PUBLIC_CACHE_STATUS_HEADER]: cacheStatus });
   } catch (error) {
     return handleApiError(error, ctx);
   }
 }
 
 /**
- * DELETE /api/v1/admin/posts/{id} — hard-delete a draft only (PRD §6.3 / §7.2).
- * A bodyless DELETE has no Content-Type to validate, so only the same-origin
- * CSRF check applies (browsers can't set Origin on cross-site deletes).
+ * DELETE /api/v1/admin/posts/{id} — hard-delete a DRAFT or ARCHIVED post
+ * (PUBLISHED must be archived first). A bodyless DELETE has no Content-Type
+ * to validate, so only the same-origin CSRF check applies (browsers can't
+ * set Origin on cross-site deletes).
  */
 export async function DELETE(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const ctx = createRequestContext(request);
@@ -70,9 +77,18 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
     const { id } = await context.params;
     assertAdminUuid(id);
     const version = parseExpectedVersion(request.headers.get("if-match"));
-    await postCommandService.deleteDraft({ postId: id, version });
-    logger.info("admin.post.deleted", { requestId: ctx.requestId, postId: id });
-    return apiNoContent(ctx);
+    const changeSet = await postCommandService.deleteDraft({ postId: id, version });
+    // An ever-published archived post leaves public pages under its old slug —
+    // invalidate ONLY after the delete committed (same contract as PATCH). The
+    // 204 keeps the same header contract so clients can warn + retry the
+    // refresh without repeating the delete (FR-03.8).
+    const cacheStatus = await applyInvalidation(
+      buildInvalidationPlan(changeSet),
+      ctx.requestId,
+      { kind: "post", id, version },
+    );
+    logger.info("admin.post.deleted", { requestId: ctx.requestId, postId: id, cacheStatus });
+    return apiNoContent(ctx, { [PUBLIC_CACHE_STATUS_HEADER]: cacheStatus });
   } catch (error) {
     return handleApiError(error, ctx);
   }

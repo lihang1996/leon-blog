@@ -28,6 +28,16 @@ export type InvalidationPlan = {
   tags: string[];
 };
 
+/**
+ * Outcome of applying a plan: every target is attempted; `failedTargets`
+ * lists the ones that threw so callers can report partial failure without
+ * hiding the successful writes (FR-03 / delivery §4.2).
+ */
+export type InvalidationResult = {
+  ok: boolean;
+  failedTargets: string[];
+};
+
 export function dedupe(values: Iterable<string>): string[] {
   return [...new Set(values)];
 }
@@ -45,6 +55,9 @@ export function buildInvalidationPlan(changeSet: PostChangeSet): InvalidationPla
   paths.add("/");
   paths.add("/posts");
   tags.add(CACHE_TAGS.posts);
+  // The sitemap is derived from the same public data (posts/categories/tags)
+  // and is a cached special route — every post-visible change must expire it.
+  paths.add("/sitemap.xml");
 
   // Post detail: old slug (if any) + current slug. Callers building a plan for
   // category/tag CRUD pass an empty `newSlug`; only add the post-detail leg when
@@ -128,9 +141,10 @@ export function buildTagInvalidationPlan(args: {
 
 /**
  * Applies a plan. Must only be called AFTER a successful DB commit
- * (architecture §13.4). Failure is logged, never throws back to the caller —
- * the DB stays the source of truth.
- */
+ * (architecture §13.4). A failing target is recorded and reported, never
+ * thrown back to the caller and never a reason to skip the remaining
+ * targets — the DB stays the source of truth (FR-03 / delivery §4.2).
+*/
 /** Immediate expire profile for Route Handler mutations (read-your-writes). */
 export const IMMEDIATE_REVALIDATE = { expire: 0 } as const;
 
@@ -142,11 +156,13 @@ export async function applyInvalidationPlan(
     revalidateTag: (tag: string, profile: typeof IMMEDIATE_REVALIDATE) => void;
     onError: (message: string) => void;
   },
-): Promise<void> {
+): Promise<InvalidationResult> {
+  const failedTargets: string[] = [];
   for (const path of plan.paths) {
     try {
       deps.revalidatePath(path);
     } catch (error) {
+      failedTargets.push(`path:${path}`);
       deps.onError(`Cache path invalidation failed (${path}): ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -155,7 +171,22 @@ export async function applyInvalidationPlan(
       // Route Handlers cannot call updateTag(); { expire: 0 } blocks until fresh.
       deps.revalidateTag(tag, IMMEDIATE_REVALIDATE);
     } catch (error) {
+      failedTargets.push(`tag:${tag}`);
       deps.onError(`Cache tag invalidation failed (${tag}): ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+  return { ok: failedTargets.length === 0, failedTargets };
+}
+
+/**
+ * The FIXED target set of the standalone revalidate operation (FR-03 /
+ * delivery §4.2.3): only this blog's fixed public cache tags and paths.
+ * It deliberately accepts no caller-supplied paths, URLs, tags, or SQL —
+ * the endpoint cannot be turned into an arbitrary cache-flushing oracle.
+ */
+export function buildFullPublicInvalidationPlan(): InvalidationPlan {
+  return {
+    paths: ["/", "/posts", "/categories", "/tags", "/sitemap.xml"],
+    tags: dedupe([CACHE_TAGS.posts, CACHE_TAGS.categories, CACHE_TAGS.tags]),
+  };
 }

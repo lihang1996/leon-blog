@@ -1,7 +1,7 @@
 import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { isNotFoundViolation, isUniqueViolation, prisma, uniqueViolationField } from "@/lib/db/prisma";
-import { AppError, ErrorCodes, conflict } from "@/lib/errors";
+import { AppError, ErrorCodes, conflict, notFound } from "@/lib/errors";
 
 /** Map a P2002 on tags to a stable 409 (name vs slug) instead of a 500. */
 function mapTagUniqueConflict(error: unknown): never {
@@ -125,12 +125,34 @@ export const tagRepository = {
     }
   },
 
-  async delete(id: string, expectedVersion: number): Promise<void> {
-    try {
-      await prisma.tag.delete({ where: { id, version: expectedVersion } });
-    } catch (error) {
-      mapTagWriteError(error);
-    }
+  /**
+   * Transactional delete (FR-04/FR-05): locks and version-guards the tag
+   * FIRST, bumps every linked post's version + updatedAt in the same
+   * transaction, then removes the link rows and the tag (the FKs would
+   * cascade, but bumping first is what carries the posts' epoch forward).
+   * A zero-row guard bump = stale confirmation or vanished target →
+   * same-transaction rollback, links untouched.
+   */
+  async deleteAndUnlink(id: string, expectedVersion: number): Promise<number> {
+    return prisma.$transaction(async (tx) => {
+      const guard = await tx.tag.updateMany({
+        where: { id, version: expectedVersion },
+        data: { version: { increment: 1 } },
+      });
+      if (guard.count === 0) {
+        const exists = await tx.tag.findUnique({ where: { id }, select: { id: true } });
+        throw exists
+          ? conflict(ErrorCodes.TAG_CONCURRENT_MODIFICATION, "标签或关联文章已变化，请刷新后重新确认")
+          : notFound(ErrorCodes.TAG_NOT_FOUND, "标签不存在");
+      }
+      const affected = await tx.post.updateMany({
+        where: { postTags: { some: { tagId: id } } },
+        data: { version: { increment: 1 } },
+      });
+      await tx.postTag.deleteMany({ where: { tagId: id } });
+      await tx.tag.deleteMany({ where: { id } });
+      return affected.count;
+    });
   },
 
   /** Verify every id exists; returns the matching slugs (used by post upserts). */

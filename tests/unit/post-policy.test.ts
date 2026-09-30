@@ -22,10 +22,10 @@ describe("post state machine", () => {
     expect(canTransition("DRAFT", "DRAFT")).toBe(false);
   });
 
-  it("only drafts can be hard-deleted", () => {
+  it("drafts and archived posts can be hard-deleted; published must archive first", () => {
     expect(canHardDelete("DRAFT")).toBe(true);
+    expect(canHardDelete("ARCHIVED")).toBe(true);
     expect(canHardDelete("PUBLISHED")).toBe(false);
-    expect(canHardDelete("ARCHIVED")).toBe(false);
   });
 });
 

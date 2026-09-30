@@ -6,9 +6,22 @@ import { Button } from "../../ui/button";
 import { Modal } from "../../ui/modal";
 import { CatCategoryAdmin, CategoryIcon, TitleBrushUnderline } from "../../ui/cat-doodles";
 import { clientApi, type AdminCategoryItem } from "@/lib/client-api";
-import { mutationErrorMessage, mutationNeedsReview } from "./editor-state";
+import { cacheRefreshWarningText, evaluateCacheStatus, mutationErrorMessage, mutationNeedsReview } from "./editor-state";
+import { CacheRefreshWarning } from "./cache-refresh-warning";
+import {
+  categoryFormDirty,
+  shouldConfirmTargetSwitch,
+  type CategoryFormBaseline,
+  type CategoryFormValues,
+} from "./taxonomy-form-state";
+import { ensureAdminLeaveGuard, unregisterAdminLeaveGuard } from "./logout-guard";
+import { useEditorLeaveGuard } from "./use-editor-leave-guard";
 
 const AVAILABLE_ICONS = ["dev", "bulb", "design", "tool", "plane", "heart", "coffee", "leaf"];
+
+const EMPTY_CATEGORY_VALUES: CategoryFormValues = {
+  name: "", slug: "", description: "", icon: "dev", sortOrder: 1,
+};
 
 export function AdminCategoriesView() {
   const [categories, setCategories] = useState<(AdminCategoryItem & { iconKey?: string })[]>([]);
@@ -20,8 +33,18 @@ export function AdminCategoriesView() {
   const [description, setDescription] = useState("");
   const [selectedIcon, setSelectedIcon] = useState("dev");
   const [sortOrder, setSortOrder] = useState(1);
+  // FR-06: every editable field (name/slug/description/icon/sort) is measured
+  // against this baseline; it moves ONLY on load, explicit reset, or a
+  // confirmed save.
+  const [baseline, setBaseline] = useState<CategoryFormBaseline>({ id: null, version: null, values: EMPTY_CATEGORY_VALUES });
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+
+  // Confirmed write whose public-cache refresh failed / is unknown (FR-03,
+  // delivery §4.2.1-2): reported separately from the success feedback, with
+  // its own fixed-set refresh retry (Codex review #4).
+  const [cacheWarning, setCacheWarning] = useState<string | null>(null);
+  const [refreshingCache, setRefreshingCache] = useState(false);
 
   // Delete modal state
   const [deleteTarget, setDeleteTarget] = useState<AdminCategoryItem | null>(null);
@@ -33,6 +56,26 @@ export function AdminCategoriesView() {
   const [needsReview, setNeedsReview] = useState(false);
   const lifecycle = useRef(0);
   const busy = useRef(false);
+
+  const formValues: CategoryFormValues = { name, slug, description, icon: selectedIcon, sortOrder };
+  const dirty = categoryFormDirty(baseline, formValues);
+
+  // FR-06: cancel/back/forward/refresh protections reuse the same leave-guard
+  // machinery as the editor — including the pending-review state, so an
+  // unconfirmed write can never be silently left behind. When the browser
+  // lacks the Navigation API, back/forward cannot be intercepted; the banner
+  // is the explicit fallback (refresh/close and in-app links stay guarded).
+  const historyGuardAvailable = useEditorLeaveGuard(dirty || saving || needsReview);
+
+  // FR-20: expose this form's unsaved/busy state to the header logout decision.
+  useEffect(() => {
+    ensureAdminLeaveGuard("admin-categories", {
+      blocked: dirty || needsReview,
+      busy: saving || deleting,
+      subject: "分类管理表单",
+    });
+    return () => { unregisterAdminLeaveGuard("admin-categories"); };
+  }, [dirty, needsReview, saving, deleting]);
 
   useLayoutEffect(() => {
     lifecycle.current += 1;
@@ -61,30 +104,47 @@ export function AdminCategoriesView() {
   }, [revision]);
   const fetchCategories = () => { setLoading(true); setRevision((value) => value + 1); };
 
-  const handleEdit = (cat: AdminCategoryItem & { iconKey?: string }) => {
+  /** Unconditional form load: fields AND baseline (FR-06.3 keeps id/version). */
+  const applyCategoryToForm = (cat: AdminCategoryItem & { iconKey?: string }) => {
     setEditingCategory(cat);
     setName(cat.name);
     setSlug(cat.slug);
     setDescription(cat.description || "");
     setSelectedIcon(cat.iconKey || "dev");
     setSortOrder(cat.sortOrder ?? 1);
+    setBaseline({ id: cat.id, version: cat.version, values: {
+      name: cat.name, slug: cat.slug, description: cat.description || "",
+      icon: cat.iconKey || "dev", sortOrder: cat.sortOrder ?? 1,
+    } });
+  };
+
+  const handleEdit = (cat: AdminCategoryItem & { iconKey?: string }) => {
+    // FR-06.4: re-clicking the row already being edited must never overwrite
+    // the user's in-progress inputs.
+    if (cat.id === baseline.id) return;
+    if (shouldConfirmTargetSwitch(dirty, baseline.id, cat.id)) {
+      if (!window.confirm("当前分类表单有未保存的修改。确认放弃这些修改并切换到该分类吗？（取消将完整保留当前输入）")) return;
+    }
+    applyCategoryToForm(cat);
     setFeedback(null);
   };
 
   const handleResetForm = () => {
+    const values = { ...EMPTY_CATEGORY_VALUES, sortOrder: categories.length + 1 };
     setEditingCategory(null);
-    setName("");
-    setSlug("");
-    setDescription("");
-    setSelectedIcon("dev");
-    setSortOrder(categories.length + 1);
+    setName(values.name);
+    setSlug(values.slug);
+    setDescription(values.description);
+    setSelectedIcon(values.icon);
+    setSortOrder(values.sortOrder);
+    setBaseline({ id: null, version: null, values });
     setFeedback(null);
     setNeedsReview(false);
   };
 
   const handleReloadForm = async () => {
     if (busy.current || !window.confirm("丢弃当前输入并重新载入服务器最新分类？")) return;
-    const targetId = editingCategory?.id;
+    const targetId = baseline.id;
     const generation = lifecycle.current;
     busy.current = true;
     setSaving(true);
@@ -96,7 +156,7 @@ export function AdminCategoriesView() {
       setLoadError("");
       const latest = res.data.find((category) => category.id === targetId);
       if (targetId && !latest) { setFeedback({ type: "error", msg: "该分类已不存在。输入已保留，可取消编辑。" }); return; }
-      if (latest) handleEdit({ ...latest, iconKey: latest.icon || "dev" });
+      if (latest) applyCategoryToForm({ ...latest, iconKey: latest.icon || "dev" });
       else handleResetForm();
       setNeedsReview(false);
     } finally {
@@ -132,6 +192,12 @@ export function AdminCategoriesView() {
         setNeedsReview(mutationNeedsReview(res));
         setFeedback({ type: "error", msg: mutationErrorMessage(res) });
       } else {
+        const evaluated = evaluateCacheStatus(res.cacheStatus);
+        setCacheWarning(
+          evaluated === "failed" || evaluated === "unknown"
+            ? cacheRefreshWarningText(editingCategory ? "分类已保存" : "分类已创建", evaluated)
+            : null,
+        );
         fetchCategories();
         handleResetForm();
         setFeedback({ type: "success", msg: editingCategory ? "分类更新成功！" : "分类创建成功！" });
@@ -140,6 +206,19 @@ export function AdminCategoriesView() {
       if (generation === lifecycle.current) { setNeedsReview(true); setFeedback({ type: "error", msg: "无法确认保存结果，输入已保留，请先核对服务器内容。" }); }
     } finally {
       if (generation === lifecycle.current) { busy.current = false; setSaving(false); }
+    }
+  };
+
+  // One click = one fixed-set refresh request; it never repeats the category write.
+  const handleRetryCacheRefresh = async () => {
+    if (refreshingCache) return;
+    setRefreshingCache(true);
+    try {
+      const res = await clientApi.revalidatePublicCache();
+      if (!res.error && res.data?.cacheStatus === "invalidated") setCacheWarning(null);
+      // Failures keep the warning for a later manual retry.
+    } finally {
+      setRefreshingCache(false);
     }
   };
 
@@ -153,10 +232,23 @@ export function AdminCategoriesView() {
       const res = await clientApi.deleteCategory(target.id, target.version);
       if (generation !== lifecycle.current) return;
       setDeleteTarget(null);
-      if (res.error) setFeedback({ type: "error", msg: `删除未成功确认：${res.error}。请核对列表后再操作。` });
+      if (res.errorCode === "CATEGORY_CONCURRENT_MODIFICATION") {
+        // FR-05.5: the association set changed since the confirmation — never
+        // auto-refresh the version and continue deleting; make the user
+        // re-confirm on fresh data.
+        setFeedback({ type: "error", msg: "分类或关联文章已变化，请刷新后重新确认。" });
+      } else if (res.error) setFeedback({ type: "error", msg: `删除未成功确认：${res.error}。请核对列表后再操作。` });
       else {
+        const evaluated = evaluateCacheStatus(res.cacheStatus);
+        setCacheWarning(
+          evaluated === "failed" || evaluated === "unknown"
+            ? cacheRefreshWarningText("分类已删除", evaluated)
+            : null,
+        );
         if (editingCategory?.id === target.id) handleResetForm();
-        setFeedback({ type: "success", msg: `已删除分类「${target.name}」，其下 ${target.postCount || 0} 篇文章变为未分类` });
+        // FR-05.6: the 204 carries no counts — the copy must not report the client's
+        // stale snapshot number (the transaction's real count goes to the log).
+        setFeedback({ type: "success", msg: `已删除分类「${target.name}」，关联文章已转为未分类` });
       }
       fetchCategories();
     } finally {
@@ -203,7 +295,14 @@ export function AdminCategoriesView() {
           </div>
         )}
 
+        {cacheWarning && (
+          <CacheRefreshWarning message={cacheWarning} onRetry={handleRetryCacheRefresh} refreshing={refreshingCache} />
+        )}
+
         {needsReview && <Button variant="outline" disabled={saving || deleting} onClick={handleReloadForm}>放弃输入并重新加载</Button>}
+        {!historyGuardAvailable && (
+          <p role="alert" className="text-xs text-[#E65A00]">此浏览器不支持安全的后退/前进保护，离开前请保存或复制当前输入，建议使用最新版浏览器。</p>
+        )}
         {/* Lock the form and row selection until the submitted snapshot settles. */}
         <fieldset disabled={saving || deleting} aria-label="分类管理" className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start min-w-0">
           {/* Left: Form Card */}
@@ -217,7 +316,11 @@ export function AdminCategoriesView() {
                 {editingCategory && (
                   <button
                     type="button"
-                    onClick={() => { if (window.confirm("放弃当前分类输入？")) handleResetForm(); }}
+                    onClick={() => {
+                      // FR-06.5: no prompt when nothing actually changed.
+                      if (dirty && !window.confirm("放弃当前分类输入？（取消将完整保留当前输入）")) return;
+                      handleResetForm();
+                    }}
                     className="text-xs text-[#8C8375] hover:text-[#E65A00]"
                   >
                     取消编辑

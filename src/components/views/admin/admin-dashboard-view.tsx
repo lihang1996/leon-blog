@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Header } from "../../ui/header";
 import { StatusBadge } from "../../ui/badge";
@@ -11,35 +11,242 @@ import {
   TagOutlineIcon,
   PottedPlant,
 } from "../../ui/cat-doodles";
-import { clientApi, type AdminPostItem, type AdminCategoryItem, type AdminTagItem } from "@/lib/client-api";
+import { clientApi, isAuthFailure, type AdminPostItem, type AdminCategoryItem, type AdminTagItem } from "@/lib/client-api";
 import { formatDateTime } from "@/lib/format";
+
+/**
+ * FR-09: each resource (posts/categories/tags) carries its own read state —
+ * loading / success / failure — so a single failed request can never render
+ * the others as fake zeros, and a real zero only shows after a CONFIRMED
+ * successful read. The post total comes from pagination metadata ONLY; when
+ * the meta is missing the total is explicitly unknown, never "5" (the recent
+ * list length).
+ *
+ * `hasData` records that a CONFIRMED successful read is still displayed. It
+ * is carried across the loading phase of a retry: a network/server-class
+ * failure then keeps the old values with a staleness marker (FR-09.5), while
+ * any other failure hides them. Deriving "had data" from `phase ===
+ * "success"` would break, because every retry first flips the phase to
+ * loading (Codex review round 1).
+ */
+type ReadState = {
+  phase: "loading" | "success" | "error";
+  hasData: boolean;
+  message?: string;
+  /** Error while a confirmed-success value is still displayed (kept old data). */
+  stale?: boolean;
+};
+
+const INITIAL_READ_STATE: ReadState = { phase: "loading", hasData: false };
+
+function startReading(previous: ReadState): ReadState {
+  return { phase: "loading", hasData: previous.hasData };
+}
+
+function isNetworkOrServerFailure(result: { status: number; errorCode?: string | null }): boolean {
+  return result.status === 0 || result.status >= 500 || result.errorCode === "INVALID_RESPONSE";
+}
+
+function readErrorMessage(result: { error: string | null; status: number }): string {
+  if (result.status === 0) return "网络连接失败，暂无法获取";
+  return result.error || "读取失败，暂无法获取";
+}
+
+export function DashboardStatCard({
+  label,
+  href,
+  icon,
+  state,
+  value,
+  onRetry,
+}: {
+  label: string;
+  href: string;
+  icon: React.ReactNode;
+  state: ReadState;
+  value: number | null;
+  onRetry: () => void;
+}) {
+  // First load (never had data) shows "—"; a non-stale failure shows
+  // 暂无法获取; everything else — success, retry loading over old data,
+  // stale-marked failure — shows the value itself ("—" when unknown).
+  const display =
+    state.phase === "loading" && !state.hasData ? "—"
+    : state.phase === "error" && !state.stale ? "暂无法获取"
+    : value === null ? "—"
+    : value;
+  return (
+    <Link
+      href={href}
+      className="paper-card p-6 flex items-center gap-5 hover:border-[#E65A00] transition-colors group"
+    >
+      {icon}
+      <div className="min-w-0">
+        <div className="text-4xl font-extrabold font-serif text-[#1A1A1A] leading-none" aria-label={label}>
+          {display}
+        </div>
+        <div className="text-sm text-[#6B655C] mt-1">{label}</div>
+        {value === null && state.phase === "success" && (
+          <div className="text-[11px] text-[#8C8375] mt-0.5">总数未知：响应缺少分页信息</div>
+        )}
+        {state.phase === "error" && state.stale && (
+          <div className="text-[11px] text-[#E65A00] mt-0.5">数据可能不是最新（读取失败），显示上次成功值</div>
+        )}
+        {state.phase === "error" && !state.stale && (
+          <div className="text-[11px] text-[#E65A00] mt-0.5">
+            {state.message}
+            <button
+              type="button"
+              onClick={(event) => { event.preventDefault(); event.stopPropagation(); onRetry(); }}
+              className="ml-1 underline font-semibold cursor-pointer"
+            >
+              重试
+            </button>
+          </div>
+        )}
+      </div>
+    </Link>
+  );
+}
 
 export function AdminDashboardView() {
   const [posts, setPosts] = useState<AdminPostItem[]>([]);
   const [categories, setCategories] = useState<AdminCategoryItem[]>([]);
   const [tags, setTags] = useState<AdminTagItem[]>([]);
   const [totalPosts, setTotalPosts] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Per-resource independent read states (FR-09.1).
+  const [postsState, setPostsState] = useState<ReadState>(INITIAL_READ_STATE);
+  const [categoriesState, setCategoriesState] = useState<ReadState>(INITIAL_READ_STATE);
+  const [tagsState, setTagsState] = useState<ReadState>(INITIAL_READ_STATE);
+  // 身份/权限失效：必须遮蔽旧统计与文章行（FR-09.5），只留重新登录入口。
+  const [authFailed, setAuthFailed] = useState<string | null>(null);
+
+  const loadPosts = useCallback(async () => {
+    setPostsState(startReading);
+    const res = await clientApi.getAdminPosts({ pageSize: 5 });
+    if (isAuthFailure(res)) {
+      // Mask every previously loaded admin value — never render stale stats.
+      setPosts([]);
+      setCategories([]);
+      setTags([]);
+      setTotalPosts(null);
+      setPostsState(INITIAL_READ_STATE);
+      setCategoriesState(INITIAL_READ_STATE);
+      setTagsState(INITIAL_READ_STATE);
+      setAuthFailed(res.error ?? "登录状态已失效");
+      return;
+    }
+    if (res.error || !res.data) {
+      const message = readErrorMessage(res);
+      // Only network/server-class failures may keep the previous values with
+      // a staleness marker; other failures hide the numbers (FR-09.5).
+      const keepOld = isNetworkOrServerFailure(res);
+      if (!keepOld) {
+        setPosts([]);
+        setTotalPosts(null);
+      }
+      setPostsState((previous) => ({
+        phase: "error",
+        hasData: keepOld && previous.hasData,
+        message,
+        stale: keepOld && previous.hasData,
+      }));
+      return;
+    }
+    setPosts(res.data);
+    // Total comes from pagination metadata only; a missing meta means the
+    // total is UNKNOWN — never the recent-list length (FR-09.4).
+    setTotalPosts(res.meta ? res.meta.total : null);
+    setPostsState({ phase: "success", hasData: true });
+  }, []);
+
+  const loadCategories = useCallback(async () => {
+    setCategoriesState(startReading);
+    const res = await clientApi.getAdminCategories();
+    if (isAuthFailure(res)) {
+      setCategories([]);
+      setCategoriesState(INITIAL_READ_STATE);
+      setAuthFailed(res.error ?? "登录状态已失效");
+      return;
+    }
+    if (res.error || !res.data) {
+      const message = readErrorMessage(res);
+      const keepOld = isNetworkOrServerFailure(res);
+      if (!keepOld) setCategories([]);
+      setCategoriesState((previous) => ({
+        phase: "error",
+        hasData: keepOld && previous.hasData,
+        message,
+        stale: keepOld && previous.hasData,
+      }));
+      return;
+    }
+    setCategories(res.data);
+    setCategoriesState({ phase: "success", hasData: true });
+  }, []);
+
+  const loadTags = useCallback(async () => {
+    setTagsState(startReading);
+    const res = await clientApi.getAdminTags();
+    if (isAuthFailure(res)) {
+      setTags([]);
+      setTagsState(INITIAL_READ_STATE);
+      setAuthFailed(res.error ?? "登录状态已失效");
+      return;
+    }
+    if (res.error || !res.data) {
+      const message = readErrorMessage(res);
+      const keepOld = isNetworkOrServerFailure(res);
+      if (!keepOld) setTags([]);
+      setTagsState((previous) => ({
+        phase: "error",
+        hasData: keepOld && previous.hasData,
+        message,
+        stale: keepOld && previous.hasData,
+      }));
+      return;
+    }
+    setTags(res.data);
+    setTagsState({ phase: "success", hasData: true });
+  }, []);
 
   useEffect(() => {
-    Promise.all([
-      clientApi.getAdminPosts({ pageSize: 5 }).then((res) => {
-        if (res.data) {
-          setPosts(res.data);
-          if (res.meta) setTotalPosts(res.meta.total);
-          else setTotalPosts(res.data.length);
-        }
-      }),
-      clientApi.getAdminCategories().then((res) => {
-        if (res.data) setCategories(res.data);
-      }),
-      clientApi.getAdminTags().then((res) => {
-        if (res.data) setTags(res.data);
-      }),
-    ]).finally(() => {
-      setLoading(false);
+    // Deferred like the editor's client-only initializations: the loaders
+    // flip their phase to loading synchronously, which must not happen inside
+    // the effect body (cascading renders).
+    queueMicrotask(() => {
+      void loadPosts();
+      void loadCategories();
+      void loadTags();
     });
-  }, []);
+  }, [loadPosts, loadCategories, loadTags]);
+
+  const retryAll = () => {
+    if (postsState.phase === "error") void loadPosts();
+    if (categoriesState.phase === "error") void loadCategories();
+    if (tagsState.phase === "error") void loadTags();
+  };
+  const anyStale = [postsState, categoriesState, tagsState].some((state) => state.phase === "error" && state.stale);
+
+  if (authFailed) {
+    return (
+      <div className="min-h-screen flex flex-col">
+        <Header admin activePath="/admin" />
+        <main className="flex-1 grid place-items-center px-4 py-16">
+          <div className="paper-card p-8 max-w-md w-full text-center space-y-4">
+            <h1 className="text-xl font-bold font-serif text-[#1A1A1A]">登录状态已失效</h1>
+            <p className="text-sm text-[#6B655C]">{authFailed}。为避免展示过期的后台数据，统计与文章信息已隐藏。</p>
+            <Link
+              href="/admin/login"
+              className="inline-flex min-h-11 items-center justify-center rounded-full bg-[#E65A00] px-7 text-sm font-bold text-white hover:bg-[#C24E00] transition-colors"
+            >
+              重新登录
+            </Link>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col relative">
@@ -60,46 +267,41 @@ export function AdminDashboardView() {
           </Link>
         </div>
 
+        {/* FR-09.5: previously-loaded values kept ONLY for network/server-class
+            failures, always annotated as possibly stale. */}
+        {anyStale && (
+          <div role="status" className="p-3.5 rounded-2xl text-xs sm:text-sm font-semibold bg-[#FDF3D7] text-[#6B5518] border border-[#F0DFA8] flex flex-wrap items-center gap-2">
+            <span>部分数据读取失败，下方统计可能不是最新。</span>
+            <button type="button" onClick={retryAll} className="underline font-bold cursor-pointer">重试全部</button>
+          </div>
+        )}
+
         {/* 3 Stat Cards: dark outline doodle icons, icon + number side by side */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-          <Link
+          <DashboardStatCard
+            label="文章总数"
             href="/admin/posts"
-            className="paper-card p-6 flex items-center gap-5 hover:border-[#E65A00] transition-colors group"
-          >
-            <NotePencilIcon className="h-14 w-14 shrink-0 text-[#2D1B0A]" />
-            <div>
-              <div className="text-4xl font-extrabold font-serif text-[#1A1A1A] leading-none">
-                {loading ? "-" : (totalPosts ?? posts.length)}
-              </div>
-              <div className="text-sm text-[#6B655C] mt-1">文章总数</div>
-            </div>
-          </Link>
-
-          <Link
+            icon={<NotePencilIcon className="h-14 w-14 shrink-0 text-[#2D1B0A]" />}
+            state={postsState}
+            value={totalPosts}
+            onRetry={() => { void loadPosts(); }}
+          />
+          <DashboardStatCard
+            label="分类总数"
             href="/admin/categories"
-            className="paper-card p-6 flex items-center gap-5 hover:border-[#E65A00] transition-colors group"
-          >
-            <FolderOutlineIcon className="h-14 w-14 shrink-0 text-[#2D1B0A]" />
-            <div>
-              <div className="text-4xl font-extrabold font-serif text-[#1A1A1A] leading-none">
-                {loading ? "-" : categories.length}
-              </div>
-              <div className="text-sm text-[#6B655C] mt-1">分类总数</div>
-            </div>
-          </Link>
-
-          <Link
+            icon={<FolderOutlineIcon className="h-14 w-14 shrink-0 text-[#2D1B0A]" />}
+            state={categoriesState}
+            value={categories.length}
+            onRetry={() => { void loadCategories(); }}
+          />
+          <DashboardStatCard
+            label="标签总数"
             href="/admin/tags"
-            className="paper-card p-6 flex items-center gap-5 hover:border-[#E65A00] transition-colors group"
-          >
-            <TagOutlineIcon className="h-14 w-14 shrink-0 text-[#2D1B0A]" />
-            <div>
-              <div className="text-4xl font-extrabold font-serif text-[#1A1A1A] leading-none">
-                {loading ? "-" : tags.length}
-              </div>
-              <div className="text-sm text-[#6B655C] mt-1">标签总数</div>
-            </div>
-          </Link>
+            icon={<TagOutlineIcon className="h-14 w-14 shrink-0 text-[#2D1B0A]" />}
+            state={tagsState}
+            value={tags.length}
+            onRetry={() => { void loadTags(); }}
+          />
         </div>
 
         {/* Recent updates card: title lives INSIDE the card per mockup */}
@@ -120,10 +322,24 @@ export function AdminDashboardView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#FAF2E8]">
-                {loading ? (
+                {postsState.phase === "loading" && !postsState.hasData ? (
                   <tr>
                     <td colSpan={5} className="py-8 text-center text-xs text-[#8C8375]">
                       加载中...
+                    </td>
+                  </tr>
+                ) : postsState.phase === "error" && !postsState.stale ? (
+                  <tr>
+                    <td colSpan={5} className="py-8 text-center text-xs" role="alert">
+                      暂无法获取最近文章。
+                      <button type="button" onClick={() => { void loadPosts(); }} className="ml-2 underline font-semibold text-[#E65A00] cursor-pointer">重试</button>
+                    </td>
+                  </tr>
+                ) : postsState.phase === "error" && postsState.stale ? (
+                  <tr>
+                    <td colSpan={5} className="py-8 text-center text-xs" role="alert">
+                      以下为上次成功读取的文章，可能不是最新。
+                      <button type="button" onClick={() => { void loadPosts(); }} className="ml-2 underline font-semibold text-[#E65A00] cursor-pointer">重试</button>
                     </td>
                   </tr>
                 ) : posts.length === 0 ? (
