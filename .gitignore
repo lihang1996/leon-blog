@@ -63,3 +63,4 @@ pnpm-debug.log*
 
 # temporary local-only integration config
 /vitest.integration.local.config.ts
+aaa.text
