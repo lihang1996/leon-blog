@@ -553,13 +553,20 @@ describe("deleteConditionally concurrency (B01)", () => {
 
     expect(deleted).toBe(false);
 
-    // The post survived, carrying the concurrent writer's change.
+    // The post survived, carrying the concurrent writer's change — including
+    // its taxonomy relations: the categoryId and the COMPLETE postTags set
+    // must be exactly what the failed delete started from (166 B01: the old
+    // assertions only checked version/contentMd, so a rolled-back delete that
+    // still detached the category/tags would have passed).
     const survivor = await prisma.post.findUniqueOrThrow({
       where: { id: stored.id },
-      select: { version: true, contentMd: true },
+      select: { version: true, contentMd: true, categoryId: true, postTags: { select: { tagId: true } } },
     });
     expect(survivor.version).toBe(stored.version + 1);
     expect(survivor.contentMd).toBe("并发修改");
+    expect(survivor.categoryId).toBe(category.id);
+    expect(survivor.postTags).toHaveLength(1);
+    expect(survivor.postTags.map((pt) => pt.tagId)).toEqual([tag.id]);
 
     // Taxonomy rows are exactly as before the failed delete: version AND
     // updatedAt untouched (a committed bump would change both).
@@ -576,5 +583,81 @@ describe("deleteConditionally concurrency (B01)", () => {
     });
     expect(tagAfter.version).toBe(tag.version);
     expect(tagAfter.updatedAt).toEqual(tag.updatedAt);
+  });
+
+  it("surfaces the same race through the REAL service exit as a 409 POST_CONCURRENT_MODIFICATION and keeps the survivor's relations intact", async () => {
+    const category = await prisma.category.create({
+      data: { name: "服务冲突类B01", slug: "cat-svc-b01" },
+      select: { id: true, version: true, updatedAt: true },
+    });
+    const tagA = await createTag("服务甲", "svc-a");
+    const tagB = await createTag("服务乙", "svc-b");
+    const { post } = await postCommandService.createDraft({
+      actorId: authorId,
+      input: draftInput({ slug: "svc-race" }),
+    });
+    await prisma.post.update({
+      where: { id: post.id },
+      data: { categoryId: category.id, postTags: { create: [{ tagId: tagA.id }, { tagId: tagB.id }] } },
+    });
+    // Pre-race taxonomy baseline (captured BEFORE the delete attempt so a
+    // wrongly-committed bump cannot hide inside the baseline).
+    const taxonomyBefore = await prisma.tag.findMany({
+      where: { id: { in: [tagA.id, tagB.id] } },
+      select: { id: true, version: true, updatedAt: true },
+    });
+
+    // Deterministically pin the service's read→delete interleaving: the
+    // service's own findAdminById returns the PRE-race row and the concurrent
+    // writer bumps the version right after that read — the exact check→delete
+    // window the conditional delete guards. Only the timing is forced; the
+    // service validation, the real conditional delete, its transaction, and
+    // the DB rows all stay real (nothing about the delete itself is mocked).
+    const realFindAdminById = postRepository.findAdminById.bind(postRepository);
+    const spy = vi.spyOn(postRepository, "findAdminById").mockImplementation(async (id: string) => {
+      const row = await realFindAdminById(id);
+      await prisma.post.update({
+        where: { id },
+        data: { contentMd: "并发写入", version: { increment: 1 } },
+      });
+      return row;
+    });
+    try {
+      await expectError(
+        postCommandService.deleteDraft({ postId: post.id, version: post.version }),
+        ErrorCodes.POST_CONCURRENT_MODIFICATION,
+        409,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The survivor keeps the concurrent writer's content AND the full
+    // relation set the failed delete would have destroyed.
+    const survivor = await prisma.post.findUniqueOrThrow({
+      where: { id: post.id },
+      select: { version: true, contentMd: true, categoryId: true, postTags: { select: { tagId: true } } },
+    });
+    expect(survivor.version).toBe(post.version + 1);
+    expect(survivor.contentMd).toBe("并发写入");
+    expect(survivor.categoryId).toBe(category.id);
+    expect(survivor.postTags.map((pt) => pt.tagId).sort()).toEqual([tagA.id, tagB.id].sort());
+
+    // Taxonomy rows were never bumped for a delete that did not happen.
+    const categoryAfter = await prisma.category.findUniqueOrThrow({
+      where: { id: category.id },
+      select: { version: true, updatedAt: true },
+    });
+    expect(categoryAfter.version).toBe(category.version);
+    expect(categoryAfter.updatedAt).toEqual(category.updatedAt);
+    const taxonomyAfter = await prisma.tag.findMany({
+      where: { id: { in: [tagA.id, tagB.id] } },
+      select: { id: true, version: true, updatedAt: true },
+    });
+    for (const before of taxonomyBefore) {
+      const after = taxonomyAfter.find((row) => row.id === before.id)!;
+      expect(after.version).toBe(before.version);
+      expect(after.updatedAt).toEqual(before.updatedAt);
+    }
   });
 });

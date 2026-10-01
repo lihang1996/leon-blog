@@ -1,0 +1,4 @@
+# Deliberately empty: vitest envDir target so VITE-level env loading never
+# reads the repo root .env files. Scope: Vite only — dotenv/config imports
+# (tests/integration, prisma.config.ts) need an explicit DOTENV_CONFIG_PATH
+# for the same isolation. See vitest.config.ts.

@@ -238,10 +238,19 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
   const initialized = useRef(!initialPostId);
   const lifecycle = useRef(0);
   const busy = useRef(false);
+  // B02: WHO holds the busy gate — a business write ("write") or the cache
+  // refresh ("refresh"). Losing the page while a WRITE is pending leaves the
+  // result unconfirmed (needs review); losing it during a REFRESH only has a
+  // retryable pending flag to release — the confirmed warning stays.
+  const busyOwner = useRef<null | "write" | "refresh">(null);
   const currentSnapshot = serializeEditorSnapshot(draft);
   const dirty = currentSnapshot !== savedSnapshot;
   const historyGuardAvailable = useEditorLeaveGuard(dirty || saving || needsReview || !!newTagName);
   const disabled = saving || loading;
+  // B02: business write affordances are locked while a cache refresh holds the
+  // shared busy gate too — refresh and writes serialize on ONE owner of the
+  // page's cache notice, so no late response can clear a newer result.
+  const writeDisabled = disabled || refreshingCache;
 
   // FR-20: the header logout decision reuses the SAME leave-guard condition.
   useEffect(() => {
@@ -282,9 +291,18 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
       lifecycle.current += 1;
       if (busy.current) {
         busy.current = false;
-        setSaving(false);
-        setNeedsReview(true);
-        setFeedback({ type: "error", msg: "操作期间离开了页面，结果尚未确认。输入已保留，请先核对服务器内容，不要重复提交。" });
+        if (busyOwner.current === "refresh") {
+          // B02 (Activity hide/unmount, cacheComponents keeps state): the
+          // refresh response no longer owns this page. Release its pending
+          // flag so a retained instance can retry on reveal; the unresolved
+          // warning stays for the same reason.
+          setRefreshingCache(false);
+        } else {
+          setSaving(false);
+          setNeedsReview(true);
+          setFeedback({ type: "error", msg: "操作期间离开了页面，结果尚未确认。输入已保留，请先核对服务器内容，不要重复提交。" });
+        }
+        busyOwner.current = null;
       }
       if (initialized.current) setLoading(false);
       setShowArchiveConfirm(false);
@@ -475,6 +493,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
     const generation = lifecycle.current;
     const submittedSnapshot = currentSnapshot;
     const payload = editorContent(draft, isPublishedBefore);
+    busyOwner.current = "write";
     busy.current = true;
     setSaving(true);
     setFeedback(null);
@@ -557,6 +576,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
     } finally {
       if (generation === lifecycle.current) {
         busy.current = false;
+        busyOwner.current = null;
         setSaving(false);
       }
     }
@@ -599,6 +619,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
   const changeStatus = async (action: "archive" | "restore") => {
     if (!postId || version === null || !editorWriteAllowed({ busy: busy.current, saving, loading, needsReview, recoveryLock })) return;
     const generation = lifecycle.current;
+    busyOwner.current = "write";
     busy.current = true;
     setShowArchiveConfirm(false);
     setSaving(true);
@@ -623,7 +644,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
     } catch {
       if (generation === lifecycle.current) showMutationError({ error: "网络异常，无法确认操作结果" });
     } finally {
-      if (generation === lifecycle.current) { busy.current = false; setSaving(false); }
+      if (generation === lifecycle.current) { busy.current = false; busyOwner.current = null; setSaving(false); }
     }
   };
   const handleArchive = () => changeStatus("archive");
@@ -634,11 +655,20 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
    * re-invalidates the fixed public caches — it never repeats the save,
    * publish, archive, or delete. On success after a delete, we finish the
    * deferred navigation to the post list.
+   *
+   * B02: the refresh holds the SAME busy gate as business writes (with owner
+   * "refresh"), so save/status/tag writes can never interleave inside one
+   * generation — a late refresh response therefore cannot clear a NEWER
+   * warning produced by a write that (visibly) started after it, and vice
+   * versa. When ownership is lost (hide/unmount), the pending flag is
+   * released by the layout-effect cleanup and the warning is kept.
    */
   const retryCacheRefresh = async () => {
-    if (refreshingCache || busy.current) return;
+    if (refreshingCache || busy.current || loading) return;
     const generation = lifecycle.current;
     const wasDelete = cacheNotice?.action === "delete";
+    busyOwner.current = "refresh";
+    busy.current = true;
     setRefreshingCache(true);
     try {
       const res = await clientApi.revalidatePublicCache();
@@ -657,13 +687,18 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
       if (generation !== lifecycle.current) return;
       setFeedback({ type: "error", msg: "公开内容刷新仍未成功，警告已保留，可稍后再次重试。" });
     } finally {
-      if (generation === lifecycle.current) setRefreshingCache(false);
+      if (generation === lifecycle.current) {
+        busy.current = false;
+        busyOwner.current = null;
+        setRefreshingCache(false);
+      }
     }
   };
 
   const handleDeleteArchived = async () => {
     if (!postId || !editorWriteAllowed({ busy: busy.current, saving, loading, needsReview, recoveryLock })) return;
     const generation = lifecycle.current;
+    busyOwner.current = "write";
     busy.current = true;
     setShowDeleteConfirm(false);
     setSaving(true);
@@ -697,6 +732,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
     } finally {
       if (generation === lifecycle.current) {
         busy.current = false;
+        busyOwner.current = null;
         setSaving(false);
       }
     }
@@ -732,6 +768,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
   const handleCreateNewTag = async () => {
     if (!newTagName.trim() || !editorWriteAllowed({ busy: busy.current, saving, loading, needsReview, recoveryLock })) return;
     const generation = lifecycle.current;
+    busyOwner.current = "write";
     busy.current = true;
     setTagError("");
     setSaving(true);
@@ -764,7 +801,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
     } catch {
       if (generation === lifecycle.current) showMutationError({ error: "无法确认标签创建结果" });
     } finally {
-      if (generation === lifecycle.current) { busy.current = false; setSaving(false); }
+      if (generation === lifecycle.current) { busy.current = false; busyOwner.current = null; setSaving(false); }
     }
   };
 
@@ -893,7 +930,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
 
         <div className="flex flex-wrap items-center gap-3 text-xs text-[#6B655C]" role="status">
           <span>{loading ? "正在重新加载…" : saving ? "正在保存…" : dirty ? "有未保存的修改" : "无未保存的修改"}</span>
-          {postId && !recoveryLock && <Button variant="outline" size="sm" disabled={disabled} onClick={handleReload}>重新加载服务器内容</Button>}
+          {postId && !recoveryLock && <Button variant="outline" size="sm" disabled={writeDisabled} onClick={handleReload}>重新加载服务器内容</Button>}
           {postId && !initialPostId && <Button href={`/admin/posts/${postId}/edit`} variant="outline" size="sm">打开已保存的文章</Button>}
           {needsReview && !postId && <Button href="/admin/posts" target="_blank" rel="noreferrer" variant="outline" size="sm">在新标签页核对文章列表</Button>}
           {needsReview && !postId && <Button variant="outline" size="sm" onClick={handleDiscardUnknownDraft}>丢弃输入并开始新稿</Button>}
@@ -1156,7 +1193,8 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
                       <button
                         type="button"
                         onClick={handleCreateNewTag}
-                        className="px-3 py-1.5 text-xs font-bold rounded-full bg-[#E65A00] text-white"
+                        disabled={writeDisabled}
+                        className="px-3 py-1.5 text-xs font-bold rounded-full bg-[#E65A00] text-white disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         确定
                       </button>
@@ -1268,7 +1306,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
       {/* Fixed bottom action bar, matching redesign-admin-editor-desktop.png */}
       <div className="fixed bottom-0 inset-x-0 z-40 border-t border-[#F0E6D8] backdrop-blur bg-[color-mix(in_srgb,var(--color-bg)_95%,transparent)]">
         <div className="page-container py-3 flex items-center justify-center gap-3 sm:gap-4">
-          <Button onClick={handleSaveDraft} disabled={disabled || needsReview} size="md">
+          <Button onClick={handleSaveDraft} disabled={writeDisabled || needsReview} size="md">
             {status === "DRAFT" ? "保存草稿" : "保存更新"}
           </Button>
           {isEdit && postId ? (
@@ -1287,7 +1325,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
             </Button>
           )}
           {status === "DRAFT" && (
-            <Button onClick={handlePublish} disabled={disabled || needsReview} size="md">
+            <Button onClick={handlePublish} disabled={writeDisabled || needsReview} size="md">
               发布
             </Button>
           )}
@@ -1295,7 +1333,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
             <button
               type="button"
               onClick={() => setShowArchiveConfirm(true)}
-              disabled={disabled || needsReview}
+              disabled={writeDisabled || needsReview}
               className="px-2 py-2 text-xs font-semibold text-[#8C8375] hover:text-[#1A1A1A] transition-colors cursor-pointer"
             >
               归档
@@ -1303,13 +1341,13 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
           )}
           {isEdit && status === "ARCHIVED" && (
             <>
-              <Button onClick={handleRestore} disabled={disabled || needsReview} size="md">
+              <Button onClick={handleRestore} disabled={writeDisabled || needsReview} size="md">
                 恢复为草稿
               </Button>
               <button
                 type="button"
                 onClick={() => setShowDeleteConfirm(true)}
-                disabled={disabled || needsReview}
+                disabled={writeDisabled || needsReview}
                 className="px-2 py-2 text-xs font-semibold text-[#8C8375] hover:text-[#9E2F26] transition-colors cursor-pointer"
               >
                 删除文章
@@ -1323,7 +1361,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
         title="确认归档文章？"
         description="归档后文章将从访客端下线，但内容会保留在后台，可随时恢复。未保存的正文修改不会随归档写入。"
         confirmText="确认归档"
-        confirmPending={saving}
+        confirmPending={saving || refreshingCache}
         onConfirm={handleArchive}
         onCancel={() => setShowArchiveConfirm(false)}
       />
@@ -1333,7 +1371,7 @@ function EditorForm({ initialPostId }: { initialPostId?: string }) {
         description={`即将永久删除服务器记录的文章「${serverIdentity?.title ?? "（标题加载失败）"}」（Slug：${serverIdentity?.slug ?? "未知"}），正文不可恢复。此操作不可撤销。${dirty || needsReview ? "注意：当前有未保存的输入，将随删除一并丢失。" : ""}`}
         confirmText="确认删除"
         isDanger
-        confirmPending={saving}
+        confirmPending={saving || refreshingCache}
         onConfirm={handleDeleteArchived}
         onCancel={() => setShowDeleteConfirm(false)}
       />
